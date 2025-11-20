@@ -11,8 +11,18 @@
   "scripts": {
     "start": "docker compose up --build -d",
     "stop": "docker compose down",
-    "build": "yarn workspaces run build",
+    "build": "pnpm run --filter='./packages/*' build",
     "lint": "pnpm run --filter='./packages/*' lint",
     "test": "yarn workspaces run test"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.0.0",
+    "@nestjs/schematics": "^10.0.0",
+    "@types/jest": "catalog:devDependencies",
+    "@types/node": "catalog:devDependencies",
+    "husky": "^9.1.7",
+    "ts-jest": "catalog:devDependencies",
+    "ts-node": "catalog:devDependencies",
+    "typescript": "catalog:devDependencies"
   }
 }
