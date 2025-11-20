@@ -34,7 +34,7 @@ export class TelegramService implements OnModuleInit {
 
   @Command('news')
   async onNews(ctx: Context) {
-    await ctx.reply('Breaking News: NestJS Telegram Bot example launched!');
+    await ctx.reply('Breaking News: Zkpal Telegram Bot example launched!');
   }
 
   @Command('joke')
