@@ -1,1 +1,1 @@
-export * from './player.schema';
+export * from './user.schema';

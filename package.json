@@ -13,16 +13,35 @@
     "stop": "docker compose down",
     "build": "pnpm run --filter='./packages/*' build",
     "lint": "pnpm run --filter='./packages/*' lint",
-    "test": "yarn workspaces run test"
+    "test": "pnpm run --filter='./packages/*' test"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.4.20",
+    "@nestjs/core": "^10.4.20",
+    "@nestjs/config": "^3.2.2",
+    "@nestjs/platform-express": "^10.0.0",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "^7.8.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
     "@nestjs/schematics": "^10.0.0",
-    "@types/jest": "catalog:devDependencies",
-    "@types/node": "catalog:devDependencies",
+    "@types/express": "^4.17.17",
+    "@types/jest": "^29.5.2",
+    "@types/node": "^20.3.1",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-prettier": "^5.5.4",
     "husky": "^9.1.7",
-    "ts-jest": "catalog:devDependencies",
-    "ts-node": "catalog:devDependencies",
-    "typescript": "catalog:devDependencies"
+    "jest": "^29.7.0",
+    "prettier": "^3.0.0",
+    "source-map-support": "^0.5.21",
+    "ts-jest": "^29.1.0",
+    "ts-loader": "^9.4.3",
+    "ts-node": "^10.9.1",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.7.3"
   }
 }
