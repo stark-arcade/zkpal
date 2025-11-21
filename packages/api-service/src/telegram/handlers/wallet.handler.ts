@@ -505,9 +505,9 @@ export class WalletHandler {
         if (fundingStatus.requiredAmount) {
           try {
             const requiredWei = BigInt(fundingStatus.requiredAmount);
-            const ethDivisor = BigInt('1000000000000000'); // 0.001 ETH in wei
-            const ethValue = Number(requiredWei) / Number(ethDivisor);
-            requireSTRK = ethValue.toFixed(6);
+            const strkDivisor = BigInt('100000000000000'); // 0.001 STRK in wei
+            const strkValue = Number(requiredWei) / Number(strkDivisor);
+            requireSTRK = strkValue.toFixed(6);
           } catch (e) {
             // Fallback to default
             requireSTRK = '0.001';

@@ -277,7 +277,6 @@ export class BlockchainService {
 
   /**
    * Get transaction status
-   * Note: Replace with your actual Starknet SDK implementation
    */
   async getTransactionStatus(txHash: string): Promise<{
     status: 'pending' | 'confirmed' | 'failed';

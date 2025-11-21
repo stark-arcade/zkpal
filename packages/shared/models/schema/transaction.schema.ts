@@ -21,7 +21,7 @@ export class Transaction {
   tokenAddress: string; // Token contract address
 
   @Prop()
-  tokenSymbol?: string; // Token symbol (ETH, USDC, etc.)
+  tokenSymbol?: string; // Token symbol (STRK,Ztarknet,etc.)
 
   @Prop({ required: true })
   amount: string; // Amount (as string for precision)
