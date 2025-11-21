@@ -6,20 +6,28 @@ export type UserDocument = Users & Document;
   timestamps: true,
 })
 export class Users extends Document {
-  @Prop({
-    unique: true,
-  })
-  address: string;
-
-  @Prop({
-    required: true,
-    unique: true,
-  })
-  username: string;
+  @Prop({ required: true, unique: true })
+  telegramId: string;
 
   @Prop()
-  nonce: string;
+  telegramUsername?: string;
+
+  @Prop()
+  firstName?: string;
+
+  @Prop()
+  lastName?: string;
+
+  @Prop({ default: false })
+  isWalletCreated: boolean;
+
+  @Prop({ default: 'pending' })
+  status: 'pending' | 'active' | 'suspended';
+
+  @Prop()
+  lastActivityAt?: Date; // Last time session was used
 }
 
 export const UserSchema = SchemaFactory.createForClass(Users);
-UserSchema.index({ player: 1 });
+UserSchema.index({ telegramId: 1 });
+UserSchema.index({ isWalletCreated: 1 });

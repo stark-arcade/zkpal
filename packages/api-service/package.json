@@ -1,8 +1,8 @@
 {
   "name": "api-service",
   "version": "0.0.1",
-  "description": "",
-  "author": "",
+  "description": "API Service for Zkpal",
+  "author": "StarkArcade",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {

@@ -1,9 +1,13 @@
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Module } from '@nestjs/common';
-import { TelegramController } from './telegram.controller';
-import { TelegramService } from './telegram.service';
 
+import { TelegramService } from './telegram.service';
 import { TelegrafModule } from 'nestjs-telegraf';
+import { WalletHandler } from './handlers/wallet.handler';
+import { UsersModule } from '../users/users.module';
+import { WalletModule } from '../wallet/wallet.module';
+import { AuthModule } from '../auth/auth.module';
+
 @Module({
   imports: [
     TelegrafModule.forRootAsync({
@@ -13,8 +17,11 @@ import { TelegrafModule } from 'nestjs-telegraf';
       }),
       inject: [ConfigService],
     }),
+    UsersModule,
+    WalletModule,
+    AuthModule,
   ],
-  controllers: [TelegramController],
-  providers: [TelegramService],
+  controllers: [],
+  providers: [TelegramService, WalletHandler],
 })
 export class TelegramModule {}

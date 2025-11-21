@@ -12,5 +12,6 @@ export default registerAs('app', () => {
     telegram: {
       botToken: process.env.TELEGRAM_BOT_TOKEN,
     },
+    rpc_url: process.env.RPC_URL || 'https://ztarknet-madara.d.karnot.xyz',
   };
 });
