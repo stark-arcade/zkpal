@@ -6,10 +6,6 @@ class EnvironmentVariables {
   @IsNotEmpty()
   MONGODB_URI: string;
 
-  // @IsUrl({ require_tld: false })
-  // @IsNotEmpty()
-  SERVER_URL: string;
-
   @IsString()
   @IsNotEmpty()
   TELEGRAM_BOT_TOKEN: string;
