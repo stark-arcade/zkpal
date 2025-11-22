@@ -10,6 +10,10 @@ packages/
 │       │   ├── auth.module.ts
 │       │   └── session.service.ts
 │       │
+|       ├── ai-agent /       # AI Agent for action detection
+│       │   ├── 
+│       │   └── ai-agent.service.ts
+│       │   
 │       ├── wallet/           # Wallet operations
 │       │   ├── wallet.module.ts
 │       │   ├── wallet.service.ts
@@ -194,7 +198,7 @@ Bot: "Please enter your password..."
 User: <password>
 Bot: "Wallet unlocked!"
 
-User: /send 100 0xToken... 0xRecipient...
+User: /send 100 0xToken... 0xRecipient... ---> Use AI Agent to detect action when message is sent
 Bot: "Please confirm by entering your password:"
 User: <password>
 Bot: "Transaction sent! Hash: 0x..."
@@ -227,21 +231,6 @@ PORT=3000
   - Updates pending transaction statuses
   - Queries blockchain for confirmations
 
-## 📦 Required Dependencies
-
-### Core Dependencies
-```json
-{
-  "@nestjs/common": "^10.4.20",
-  "@nestjs/mongoose": "^10.0.6",
-  "@nestjs/schedule": "^4.0.0",
-  "nestjs-telegraf": "^2.9.1",
-  "telegraf": "^4.16.3",
-  "bcrypt": "^5.1.1",
-  "mongoose": "^8.4.1",
-  "starknet": "^6.0.0"  // Replace with your Starknet SDK
-}
-```
 
 ## 🚀 Getting Started
 
@@ -283,6 +272,7 @@ The `BlockchainService` contains placeholder implementations. You need to:
 - ✅ Account lockout after failed attempts
 - ✅ Automatic cleanup of sensitive data
 - ✅ Session expiration
+### Important Security Reminders
 - ⚠️ Never log private keys or passwords
 - ⚠️ Validate all user inputs
 - ⚠️ Use HTTPS in production
@@ -291,9 +281,7 @@ The `BlockchainService` contains placeholder implementations. You need to:
 ## 📝 Next Steps
 
 1. **Implement Starknet Integration**
-   - Replace placeholder code in `BlockchainService`
-   - Test wallet generation
-   - Test transactions
+   - Test transactions Send Token to address
 
 2. **Add Error Handling**
    - Network error handling

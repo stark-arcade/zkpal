@@ -230,4 +230,6 @@ export class BlockchainService {
       );
     }
   }
+
+  // Deploy ERC8004 token contract
 }

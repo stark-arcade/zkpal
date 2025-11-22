@@ -5,12 +5,11 @@ import { UsersService } from '../../users/users.service';
 import { WalletService } from '../../wallet/wallet.service';
 import { SessionService } from '../../auth/session.service';
 import { TransactionService } from '../../wallet/transaction.service';
-import { EncryptionService } from 'shared/utils/encryption.service';
+
 import { PASSWORD_CONFIG } from 'shared/utils/constants';
 
 @Injectable()
 export class WalletHandler {
-  // Store pending operations (password input, transaction details)
   private pendingOperations = new Map<string, any>();
   // Store message IDs for password prompts and user messages (for auto-delete)
   private passwordMessageIds = new Map<
@@ -23,7 +22,6 @@ export class WalletHandler {
     private walletService: WalletService,
     private sessionService: SessionService,
     private transactionService: TransactionService,
-    private encryptionService: EncryptionService,
   ) {}
 
   /**
@@ -211,7 +209,6 @@ export class WalletHandler {
         sessionToken: session.sessionToken,
       });
 
-      // Store prompt message ID for auto-delete
       const promptMessage = await ctx.reply(
         '🔐 Please enter your password to unlock your wallet:',
       );
