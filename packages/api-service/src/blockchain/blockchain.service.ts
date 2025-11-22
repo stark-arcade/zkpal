@@ -228,9 +228,43 @@ export class BlockchainService {
    */
   async getBalance(address: string, tokenAddress?: string): Promise<string> {
     try {
-      // TODO: Replace with  balance query
+      const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
 
-      return '0';
+      const ztarknetAddress =
+        '0x01ad102B4C4b3e40a51b6Fb8a446275D600555bd63A95CdcEeD3e5ceF8A6BC1d';
+
+      const erc20Abi = [
+        {
+          name: 'balanceOf',
+          type: 'function',
+          inputs: [
+            {
+              name: 'account',
+              type: 'felt',
+            },
+          ],
+          outputs: [
+            {
+              name: 'balance',
+              type: 'Uint256',
+            },
+          ],
+          stateMutability: 'view',
+        },
+      ];
+
+      const balance = '0';
+
+      const ztarknetContract = new Contract({
+        abi: erc20Abi,
+        address: ztarknetAddress,
+        providerOrAccount: myProvider,
+      });
+      const balanceResult = await ztarknetContract.balanceOf(address);
+      console.log('Balance', balanceResult);
+      const formattedBalance = Number(balanceResult.balance) / 1e18;
+      console.log('Balance', formattedBalance);
+      return formattedBalance.toString();
     } catch (error) {
       throw new BadRequestException(`Failed to get balance: ${error.message}`);
     }

@@ -20,7 +20,6 @@ export class Session {
   @Prop({ required: true, unique: true })
   sessionToken: string; // Unique session identifier
 
-  // Authentication fields
   @Prop({ required: true })
   passwordHash: string; // Bcrypt hash (for password verification)
 
