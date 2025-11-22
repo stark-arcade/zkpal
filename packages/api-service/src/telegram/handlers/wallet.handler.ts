@@ -12,6 +12,11 @@ import { PASSWORD_CONFIG } from 'shared/utils/constants';
 export class WalletHandler {
   // Store pending operations (password input, transaction details)
   private pendingOperations = new Map<string, any>();
+  // Store message IDs for password prompts and user messages (for auto-delete)
+  private passwordMessageIds = new Map<
+    string,
+    { promptMessageId?: number; userMessageId?: number }
+  >();
 
   constructor(
     private usersService: UsersService,
@@ -62,7 +67,9 @@ export class WalletHandler {
         type: 'create_wallet',
         userId: user._id.toString(),
       });
-      await ctx.reply(
+
+      // Store prompt message ID for auto-delete
+      const promptMessage = await ctx.reply(
         '🔐 Please enter a strong password for your wallet:\n\n' +
           `Requirements:\n` +
           `• Minimum ${PASSWORD_CONFIG.MIN_LENGTH} characters\n` +
@@ -71,6 +78,10 @@ export class WalletHandler {
           `• At least one number\n\n` +
           `⚠️ This password will be used to unlock your wallet. Keep it safe!`,
       );
+
+      this.passwordMessageIds.set(telegramId, {
+        promptMessageId: (promptMessage as any).message_id,
+      });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -86,9 +97,18 @@ export class WalletHandler {
     const pending = this.pendingOperations.get(telegramId);
     if (!pending || pending.type !== 'create_wallet') return;
 
+    // Store user's password message ID for deletion
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
     try {
       // Validate password
       if (!this.validatePassword(password)) {
+        // Delete password messages
+        await this.deletePasswordMessages(ctx, telegramId);
+
         await ctx.reply(
           '❌ Password does not meet requirements. Please try again:\n\n' +
             `• Minimum ${PASSWORD_CONFIG.MIN_LENGTH} characters\n` +
@@ -115,6 +135,9 @@ export class WalletHandler {
       // Update user
       await this.usersService.updateWalletStatus(pending.userId, true);
 
+      // Delete password messages
+      await this.deletePasswordMessages(ctx, telegramId);
+
       // Clear pending operation
       this.pendingOperations.delete(telegramId);
 
@@ -130,6 +153,8 @@ export class WalletHandler {
         { parse_mode: 'Markdown' },
       );
     } catch (error) {
+      // Delete password messages on error
+      await this.deletePasswordMessages(ctx, telegramId);
       this.pendingOperations.delete(telegramId);
       await ctx.reply(`❌ Failed to create wallet: ${error.message}`);
     }
@@ -186,7 +211,13 @@ export class WalletHandler {
         sessionToken: session.sessionToken,
       });
 
-      await ctx.reply('🔐 Please enter your password to unlock your wallet:');
+      // Store prompt message ID for auto-delete
+      const promptMessage = await ctx.reply(
+        '🔐 Please enter your password to unlock your wallet:',
+      );
+      this.passwordMessageIds.set(telegramId, {
+        promptMessageId: (promptMessage as any).message_id,
+      });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -201,6 +232,12 @@ export class WalletHandler {
 
     const pending = this.pendingOperations.get(telegramId);
     if (!pending || pending.type !== 'unlock_wallet') return;
+
+    // Store user's password message ID for deletion
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
 
     try {
       const wallet = await this.walletService.getWalletByUserId(pending.userId);
@@ -218,6 +255,9 @@ export class WalletHandler {
         wallet.address,
       );
 
+      // Delete password messages
+      await this.deletePasswordMessages(ctx, telegramId);
+
       // Clear pending operation
       this.pendingOperations.delete(telegramId);
 
@@ -230,6 +270,8 @@ export class WalletHandler {
           '• Lock wallet: /logout',
       );
     } catch (error) {
+      // Delete password messages on error
+      await this.deletePasswordMessages(ctx, telegramId);
       this.pendingOperations.delete(telegramId);
       await ctx.reply(`❌ ${error.message}`);
     }
@@ -338,7 +380,13 @@ export class WalletHandler {
         recipientAddress,
       });
 
-      await ctx.reply('🔐 Please confirm by entering your password:');
+      // Store prompt message ID for auto-delete
+      const promptMessage = await ctx.reply(
+        '🔐 Please confirm by entering your password:',
+      );
+      this.passwordMessageIds.set(telegramId, {
+        promptMessageId: (promptMessage as any).message_id,
+      });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -354,6 +402,12 @@ export class WalletHandler {
     const pending = this.pendingOperations.get(telegramId);
     if (!pending || pending.type !== 'send_token') return;
 
+    // Store user's password message ID for deletion
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
     try {
       // Verify password
       const isValid = await this.sessionService.verifyPassword(
@@ -362,6 +416,8 @@ export class WalletHandler {
       );
 
       if (!isValid) {
+        // Delete password messages
+        await this.deletePasswordMessages(ctx, telegramId);
         await ctx.reply('❌ Invalid password. Transaction cancelled.');
         this.pendingOperations.delete(telegramId);
         return;
@@ -376,6 +432,9 @@ export class WalletHandler {
         pending.tokenAddress,
       );
 
+      // Delete password messages
+      await this.deletePasswordMessages(ctx, telegramId);
+
       // Clear pending operation
       this.pendingOperations.delete(telegramId);
 
@@ -388,6 +447,8 @@ export class WalletHandler {
         { parse_mode: 'Markdown' },
       );
     } catch (error) {
+      // Delete password messages on error
+      await this.deletePasswordMessages(ctx, telegramId);
       this.pendingOperations.delete(telegramId);
       await ctx.reply(`❌ Transaction failed: ${error.message}`);
     }
@@ -490,42 +551,42 @@ export class WalletHandler {
         return;
       }
 
-      const fundingStatus = await this.walletService.checkWalletFundingStatus(
-        user._id.toString(),
-      );
+      // const fundingStatus = await this.walletService.checkWalletFundingStatus(
+      //   user._id.toString(),
+      // );
 
-      if (fundingStatus.isFunded) {
-        await ctx.reply(
-          `✅ Wallet is funded and ready for deployment!\n\n` +
-            `💰 Current Balance: ${fundingStatus.balance}\n\n` +
-            `Use /deploywallet to deploy your account.`,
-        );
-      } else {
-        let requireSTRK = '0.01';
-        if (fundingStatus.requiredAmount) {
-          try {
-            const requiredWei = BigInt(fundingStatus.requiredAmount);
-            const strkDivisor = BigInt('100000000000000'); // 0.001 STRK in wei
-            const strkValue = Number(requiredWei) / Number(strkDivisor);
-            requireSTRK = strkValue.toFixed(6);
-          } catch (e) {
-            // Fallback to default
-            requireSTRK = '0.001';
-          }
-        }
-        await ctx.reply(
-          `⏳ Wallet is not yet funded.\n\n` +
-            `📍 Address: \`${wallet.address}\`\n` +
-            `💰 Current Balance: ${fundingStatus.balance}\n` +
-            `💵 Required: ~${requireSTRK} STRK (for deployment fees)\n\n` +
-            `📝 **Next Steps:**\n` +
-            `1. Send at least ${requireSTRK} STRK to the address above\n` +
-            `2. Wait for the transaction to confirm\n` +
-            `3. Use /checkfunding again to verify\n` +
-            `4. Use /deploywallet to deploy your account`,
-          { parse_mode: 'Markdown' },
-        );
-      }
+      // if (fundingStatus.isFunded) {
+      //   await ctx.reply(
+      //     `✅ Wallet is funded and ready for deployment!\n\n` +
+      //       `💰 Current Balance: ${fundingStatus.balance}\n\n` +
+      //       `Use /deploywallet to deploy your account.`,
+      //   );
+      // } else {
+      //   let requireSTRK = '0.01';
+      //   if (fundingStatus.requiredAmount) {
+      //     try {
+      //       const requiredWei = BigInt(fundingStatus.requiredAmount);
+      //       const strkDivisor = BigInt('100000000000000'); // 0.001 STRK in wei
+      //       const strkValue = Number(requiredWei) / Number(strkDivisor);
+      //       requireSTRK = strkValue.toFixed(6);
+      //     } catch (e) {
+      //       // Fallback to default
+      //       requireSTRK = '0.001';
+      //     }
+      //   }
+      //   await ctx.reply(
+      //     `⏳ Wallet is not yet funded.\n\n` +
+      //       `📍 Address: \`${wallet.address}\`\n` +
+      //       `💰 Current Balance: ${fundingStatus.balance}\n` +
+      //       `💵 Required: ~${requireSTRK} STRK (for deployment fees)\n\n` +
+      //       `📝 **Next Steps:**\n` +
+      //       `1. Send at least ${requireSTRK} STRK to the address above\n` +
+      //       `2. Wait for the transaction to confirm\n` +
+      //       `3. Use /checkfunding again to verify\n` +
+      //       `4. Use /deploywallet to deploy your account`,
+      //     { parse_mode: 'Markdown' },
+      //   );
+      // }
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -581,7 +642,13 @@ export class WalletHandler {
         sessionToken: session.sessionToken,
       });
 
-      await ctx.reply('🔐 Please enter your password to deploy your wallet:');
+      // Store prompt message ID for auto-delete
+      const promptMessage = await ctx.reply(
+        '🔐 Please enter your password to deploy your wallet:',
+      );
+      this.passwordMessageIds.set(telegramId, {
+        promptMessageId: (promptMessage as any).message_id,
+      });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -597,6 +664,12 @@ export class WalletHandler {
     const pending = this.pendingOperations.get(telegramId);
     if (!pending || pending.type !== 'deploy_wallet') return;
 
+    // Store user's password message ID for deletion
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
     try {
       // Verify password
       const isValid = await this.sessionService.verifyPassword(
@@ -605,6 +678,8 @@ export class WalletHandler {
       );
 
       if (!isValid) {
+        // Delete password messages
+        await this.deletePasswordMessages(ctx, telegramId);
         await ctx.reply('❌ Invalid password. Deployment cancelled.');
         this.pendingOperations.delete(telegramId);
         return;
@@ -615,6 +690,9 @@ export class WalletHandler {
 
       const { transactionHash, contractAddress } =
         await this.walletService.deployWallet(pending.userId, password);
+
+      // Delete password messages
+      await this.deletePasswordMessages(ctx, telegramId);
 
       // Clear pending operation
       this.pendingOperations.delete(telegramId);
@@ -628,6 +706,8 @@ export class WalletHandler {
         { parse_mode: 'Markdown' },
       );
     } catch (error) {
+      // Delete password messages on error
+      await this.deletePasswordMessages(ctx, telegramId);
       this.pendingOperations.delete(telegramId);
       await ctx.reply(`❌ Deployment failed: ${error.message}`);
     }
@@ -652,6 +732,48 @@ export class WalletHandler {
    */
   async getWalletByUserId(userId: string) {
     return this.walletService.getWalletByUserId(userId);
+  }
+
+  /**
+   * Delete password messages (bot prompt and user's password message)
+   */
+  private async deletePasswordMessages(
+    ctx: Context,
+    telegramId: string,
+  ): Promise<void> {
+    try {
+      const messageIds = this.passwordMessageIds.get(telegramId);
+      if (!messageIds) return;
+
+      const chatId = (ctx.chat as any)?.id;
+      if (!chatId) return;
+
+      // Delete bot's prompt message
+      if (messageIds.promptMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, messageIds.promptMessageId);
+        } catch (error) {
+          // Ignore errors (message might already be deleted or not accessible)
+          console.warn(`Failed to delete prompt message: ${error.message}`);
+        }
+      }
+
+      // Delete user's password message
+      if (messageIds.userMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, messageIds.userMessageId);
+        } catch (error) {
+          // Ignore errors (message might already be deleted or not accessible)
+          console.warn(`Failed to delete user message: ${error.message}`);
+        }
+      }
+
+      // Clear stored message IDs
+      this.passwordMessageIds.delete(telegramId);
+    } catch (error) {
+      // Silently fail - don't interrupt the flow if deletion fails
+      console.warn(`Error deleting password messages: ${error.message}`);
+    }
   }
 
   /**

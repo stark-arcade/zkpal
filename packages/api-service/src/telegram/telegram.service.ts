@@ -59,7 +59,7 @@ export class TelegramService implements OnModuleInit {
           message += 'Use /deploywallet to deploy your wallet\n\n';
         }
         message += 'Available commands:\n';
-        message += '/login - Unlock your wallet\n';
+        message += '/login - Unlock your wallet \n';
         message += '/balance - Check balance\n';
         message += '/send - Send tokens\n';
         message += '/history - View transactions\n';
@@ -101,6 +101,7 @@ export class TelegramService implements OnModuleInit {
     await this.walletHandler.handleCreateWallet(ctx);
   }
 
+  // Active Session Wallet
   @Command('login')
   async onLogin(ctx: Context) {
     await this.walletHandler.handleLogin(ctx);
@@ -126,11 +127,6 @@ export class TelegramService implements OnModuleInit {
   @Command('logout')
   async onLogout(ctx: Context) {
     await this.walletHandler.handleLogout(ctx);
-  }
-
-  @Command('checkfunding')
-  async onCheckFunding(ctx: Context) {
-    await this.walletHandler.handleCheckFunding(ctx);
   }
 
   @Command('deploywallet')

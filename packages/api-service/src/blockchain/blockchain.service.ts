@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { erc20Abi } from '@app/shared/ztarknet/abi/erc20ABI';
+import { CONTRACT_ADDRESS } from '@app/shared/ztarknet/constants';
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -31,9 +33,7 @@ export class BlockchainService {
     try {
       // Generate public and private key pair.
       const privateKey = stark.randomAddress();
-      console.log('New OZ account:\nprivateKey=', privateKey);
       const starkKeyPub = ec.starkCurve.getStarkKey(privateKey);
-      console.log('publicKey=', starkKeyPub);
 
       const OZaccountClassHash =
         '0x01484c93b9d6cf61614d698ed069b3c6992c32549194fc3465258c2194734189';
@@ -61,85 +61,6 @@ export class BlockchainService {
   }
 
   /**
-   * Check if account address has sufficient balance for deployment
-   */
-  async checkAccountFunded(address: string): Promise<{
-    isFunded: boolean;
-    balance: string;
-    requiredAmount?: string;
-  }> {
-    try {
-      const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
-
-      const ztarknetAddress =
-        '0x01ad102B4C4b3e40a51b6Fb8a446275D600555bd63A95CdcEeD3e5ceF8A6BC1d';
-
-      const erc20Abi = [
-        {
-          name: 'balanceOf',
-          type: 'function',
-          inputs: [
-            {
-              name: 'account',
-              type: 'felt',
-            },
-          ],
-          outputs: [
-            {
-              name: 'balance',
-              type: 'Uint256',
-            },
-          ],
-          stateMutability: 'view',
-        },
-      ];
-
-      let balance = '0';
-      try {
-        const ztarknetContract = new Contract({
-          abi: erc20Abi,
-          address: ztarknetAddress,
-        });
-        const balanceResult = await ztarknetContract.balanceOf(address);
-
-        // balanceOf returns Uint256 { low, high }
-        // Convert to string
-        if (
-          balanceResult &&
-          typeof balanceResult === 'object' &&
-          'low' in balanceResult
-        ) {
-          // Uint256 format
-          const low = BigInt(balanceResult.low || 0);
-          const high = BigInt(balanceResult.high || 0);
-          balance = (high * BigInt(2 ** 128) + low).toString();
-        } else {
-          balance = balanceResult?.toString() || '0';
-        }
-      } catch (error) {
-        // If balance query fails (contract might not exist on this network), assume 0
-        console.warn(`Failed to query balance for ${address}:`, error.message);
-        balance = '0';
-      }
-
-      const balanceWei = BigInt(balance);
-
-      const requiredAmount = '1000000000000000'; // 0.001 STRK in wei (adjust as needed)
-      const requiredWei = BigInt(requiredAmount);
-
-      return {
-        isFunded: balanceWei >= requiredWei,
-        balance: balance.toString(),
-        requiredAmount,
-      };
-    } catch (error) {
-      throw new BadRequestException(
-        `Failed to check account balance: ${error.message}`,
-      );
-    }
-  }
-
-  /**
    * Deploy account after it has been funded
    */
   async deployAccount(
@@ -153,27 +74,36 @@ export class BlockchainService {
     try {
       const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
 
-      // Check if account is funded
-      // const fundingStatus = await this.checkAccountFunded(address);
-      // if (!fundingStatus.isFunded) {
-      //   throw new BadRequestException(
-      //     `Account not funded. Current balance: ${fundingStatus.balance}, Required: ${fundingStatus.requiredAmount}`,
-      //   );
-      // }
+      const balance = await this.getBalance(address);
 
-      const OZaccountClassHash =
-        '0x01484c93b9d6cf61614d698ed069b3c6992c32549194fc3465258c2194734189';
+      const OZaccountClassHash = CONTRACT_ADDRESS.OZACCOUNT_CLASS_HASH;
       const OZaccountConstructorCallData = CallData.compile({
         publicKey,
       });
-
       const OZaccount = new Account({
         provider: myProvider,
         address,
         signer: privateKey,
       });
 
-      console.log('Deploying account to:', address);
+      const fee = await OZaccount.estimateAccountDeployFee({
+        classHash: OZaccountClassHash,
+        constructorCalldata: OZaccountConstructorCallData,
+        contractAddress: OZaccount.address,
+      });
+
+      const estimatedFee = fee.overall_fee;
+      const safetyMargin = 1.2; // 20% safety margin
+      const requiredBalance = BigInt(
+        Math.floor(Number(estimatedFee) * safetyMargin),
+      );
+      const requireBalanceInWei = (Number(requiredBalance) / 1e18).toFixed(10);
+      if (Number(requireBalanceInWei) > Number(balance)) {
+        throw new BadRequestException(
+          `Account not funded. Current balance: ${balance}, Required: ${requireBalanceInWei} STRK`,
+        );
+      }
+
       const { transaction_hash, contract_address } =
         await OZaccount.deployAccount({
           classHash: OZaccountClassHash,
@@ -230,50 +160,20 @@ export class BlockchainService {
     try {
       const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
 
-      const ztarknetAddress =
-        '0x01ad102B4C4b3e40a51b6Fb8a446275D600555bd63A95CdcEeD3e5ceF8A6BC1d';
-
-      const erc20Abi = [
-        {
-          name: 'balanceOf',
-          type: 'function',
-          inputs: [
-            {
-              name: 'account',
-              type: 'felt',
-            },
-          ],
-          outputs: [
-            {
-              name: 'balance',
-              type: 'Uint256',
-            },
-          ],
-          stateMutability: 'view',
-        },
-      ];
-
-      const balance = '0';
-
       const ztarknetContract = new Contract({
         abi: erc20Abi,
-        address: ztarknetAddress,
+        address: tokenAddress || CONTRACT_ADDRESS.ZTARKNET_TOKEN,
         providerOrAccount: myProvider,
       });
       const balanceResult = await ztarknetContract.balanceOf(address);
       console.log('Balance', balanceResult);
       const formattedBalance = Number(balanceResult.balance) / 1e18;
-      console.log('Balance', formattedBalance);
       return formattedBalance.toString();
     } catch (error) {
       throw new BadRequestException(`Failed to get balance: ${error.message}`);
     }
   }
 
-  /**
-   * Send token using Account
-   * Note: Replace with your actual Starknet SDK implementation
-   */
   async sendToken(
     account: any,
     toAddress: string,

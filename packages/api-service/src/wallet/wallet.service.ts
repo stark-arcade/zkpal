@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Wallet, WalletDocument } from 'shared/models/schema/wallet.schema';
@@ -106,16 +110,16 @@ export class WalletService {
   /**
    * Check if wallet is funded and ready for deployment
    */
-  async checkWalletFundingStatus(
-    userId: string,
-  ): Promise<{ isFunded: boolean; balance: string; requiredAmount?: string }> {
-    const wallet = await this.getWalletByUserId(userId);
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
+  // async checkWalletFundingStatus(
+  //   userId: string,
+  // ): Promise<{ isFunded: boolean; balance: string; requiredAmount?: string }> {
+  //   const wallet = await this.getWalletByUserId(userId);
+  //   if (!wallet) {
+  //     throw new NotFoundException('Wallet not found');
+  //   }
 
-    return this.blockchainService.checkAccountFunded(wallet.address);
-  }
+  //   return this.blockchainService.checkAccountFunded(wallet.address);
+  // }
 
   /**
    * Get wallet by user ID
@@ -161,4 +165,3 @@ export class WalletService {
     return wallet.address;
   }
 }
-

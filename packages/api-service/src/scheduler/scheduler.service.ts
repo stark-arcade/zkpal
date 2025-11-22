@@ -19,7 +19,7 @@ export class SchedulerService implements OnModuleInit {
   /**
    * Cleanup expired sessions and keys every 5 minutes
    */
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_30_MINUTES)
   async cleanupExpiredSessions() {
     try {
       await this.sessionService.cleanupExpiredSessions();
@@ -32,15 +32,14 @@ export class SchedulerService implements OnModuleInit {
   /**
    * Update pending transaction statuses every minute
    */
-  @Cron(CronExpression.EVERY_MINUTE)
-  async updateTransactionStatuses() {
-    try {
-      // This would query pending transactions and update their status
-      // Implementation depends on your transaction tracking logic
-      console.log('Transaction statuses updated');
-    } catch (error) {
-      console.error('Error updating transaction statuses:', error);
-    }
-  }
+  // @Cron(CronExpression.EVERY_MINUTE)
+  // async updateTransactionStatuses() {
+  //   try {
+  //     // This would query pending transactions and update their status
+  //     // Implementation depends on your transaction tracking logic
+  //     console.log('Transaction statuses updated');
+  //   } catch (error) {
+  //     console.error('Error updating transaction statuses:', error);
+  //   }
+  // }
 }
-

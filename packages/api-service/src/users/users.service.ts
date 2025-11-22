@@ -50,9 +50,6 @@ export class UsersService {
     return this.userModel.findOne({ telegramId }).exec();
   }
 
-  /**
-   * Get user by ID
-   */
   async getUserById(userId: string): Promise<UserDocument | null> {
     return this.userModel.findById(userId).exec();
   }
