@@ -254,16 +254,7 @@ PORT=3000
    pnpm run start:dev
    ```
 
-## 🔧 Implementation Notes
 
-### Blockchain Integration
-The `BlockchainService` contains placeholder implementations. You need to:
-1. Import your Starknet SDK (e.g., `starknet`, `starknetjs`)
-2. Implement actual wallet generation
-3. Implement Account creation
-4. Implement balance queries
-5. Implement token transfers
-6. Implement swap logic (if needed)
 
 ### Security Best Practices
 - ✅ Private keys encrypted at rest

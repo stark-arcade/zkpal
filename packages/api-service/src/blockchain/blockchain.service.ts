@@ -133,7 +133,6 @@ export class BlockchainService {
 
   /**
    * Create Account instance from private key (for transactions)
-   * Note: Replace with your actual Starknet SDK implementation
    */
   async createAccountFromPrivateKey(
     privateKey: string,
@@ -155,7 +154,6 @@ export class BlockchainService {
 
   /**
    * Get balance using Account
-   * Note: Replace with your actual Starknet SDK implementation
    */
   async getBalance(address: string, tokenAddress?: string): Promise<string> {
     try {
@@ -211,7 +209,6 @@ export class BlockchainService {
 
   /**
    * Swap tokens (if implementing DEX integration)
-   * Note: Replace with your actual DEX integration
    */
   async swapTokens(
     account: any,
