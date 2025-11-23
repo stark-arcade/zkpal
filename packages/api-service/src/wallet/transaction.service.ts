@@ -1,7 +1,14 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Transaction, TransactionDocument } from 'shared/models/schema/transaction.schema';
+import {
+  Transaction,
+  TransactionDocument,
+} from 'shared/models/schema/transaction.schema';
 import { SessionService } from '../auth/session.service';
 import { WalletService } from './wallet.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
@@ -9,7 +16,8 @@ import { BlockchainService } from '../blockchain/blockchain.service';
 @Injectable()
 export class TransactionService {
   constructor(
-    @InjectModel(Transaction.name) private transactionModel: Model<TransactionDocument>,
+    @InjectModel(Transaction.name)
+    private transactionModel: Model<TransactionDocument>,
     private sessionService: SessionService,
     private walletService: WalletService,
     private blockchainService: BlockchainService,
@@ -29,11 +37,14 @@ export class TransactionService {
     // Get session and verify wallet is unlocked
     const isUnlocked = await this.sessionService.isWalletUnlocked(sessionToken);
     if (!isUnlocked) {
-      throw new UnauthorizedException('Wallet is not unlocked. Please unlock it first.');
+      throw new UnauthorizedException(
+        'Wallet is not unlocked. Please unlock it first.',
+      );
     }
 
     // Get decrypted private key
-    const privateKey = await this.sessionService.getDecryptedPrivateKey(sessionToken);
+    const privateKey =
+      await this.sessionService.getDecryptedPrivateKey(sessionToken);
 
     // Get wallet address
     const walletAddress = await this.walletService.getWalletAddress(userId);
@@ -43,7 +54,7 @@ export class TransactionService {
       privateKey,
       walletAddress,
     );
-
+    console.log('Account', account);
     // Execute transaction
     let txHash: string;
     try {
@@ -95,11 +106,14 @@ export class TransactionService {
     // Get session and verify wallet is unlocked
     const isUnlocked = await this.sessionService.isWalletUnlocked(sessionToken);
     if (!isUnlocked) {
-      throw new UnauthorizedException('Wallet is not unlocked. Please unlock it first.');
+      throw new UnauthorizedException(
+        'Wallet is not unlocked. Please unlock it first.',
+      );
     }
 
     // Get decrypted private key
-    const privateKey = await this.sessionService.getDecryptedPrivateKey(sessionToken);
+    const privateKey =
+      await this.sessionService.getDecryptedPrivateKey(sessionToken);
 
     // Get wallet address
     const walletAddress = await this.walletService.getWalletAddress(userId);
@@ -163,7 +177,9 @@ export class TransactionService {
   /**
    * Get transaction by hash
    */
-  async getTransactionByHash(txHash: string): Promise<TransactionDocument | null> {
+  async getTransactionByHash(
+    txHash: string,
+  ): Promise<TransactionDocument | null> {
     return this.transactionModel.findOne({ txHash }).exec();
   }
 
@@ -191,4 +207,3 @@ export class TransactionService {
       .exec();
   }
 }
-

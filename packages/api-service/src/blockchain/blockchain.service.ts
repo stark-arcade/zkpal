@@ -11,6 +11,7 @@ import {
   hash,
   CallData,
   Contract,
+  uint256,
 } from 'starknet';
 
 @Injectable()
@@ -139,12 +140,12 @@ export class BlockchainService {
     address: string,
   ): Promise<any> {
     try {
-      // TODO : Replace  Account creation logic -> Wallet client
-      return {
+      const account = new Account({
+        provider: new RpcProvider({ nodeUrl: this.rpcUrl }),
         address,
-        privateKey,
-        provider: { nodeUrl: this.rpcUrl },
-      };
+        signer: privateKey,
+      });
+      return account;
     } catch (error) {
       throw new BadRequestException(
         `Failed to create account: ${error.message}`,
@@ -181,7 +182,27 @@ export class BlockchainService {
     tokenAddress: string,
   ): Promise<string> {
     try {
-      const txHash = '0x' + ``;
+      const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
+      // const ztarknetContract = new Contract({
+      //   abi: erc20Abi,
+      //   address:
+      //     '0x01ad102b4c4b3e40a51b6fb8a446275d600555bd63a95cdceed3e5cef8a6bc1d',
+      //   providerOrAccount: account,
+      // });
+      // const result = await ztarknetContract.transfer(toAddress, BigInt(amount));
+
+      const result = await account.execute([
+        {
+          contractAddress: tokenAddress,
+          entrypoint: 'transfer',
+          calldata: CallData.compile({
+            recipient: toAddress,
+            amount: uint256.bnToUint256(0.1 * 1e18),
+          }),
+        },
+      ]);
+      await myProvider.waitForTransaction(result.transaction_hash);
+      const txHash = result.transaction_hash;
       return txHash;
     } catch (error) {
       throw new BadRequestException(`Failed to send token: ${error.message}`);

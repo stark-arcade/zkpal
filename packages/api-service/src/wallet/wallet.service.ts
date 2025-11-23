@@ -8,6 +8,7 @@ import { Model } from 'mongoose';
 import { Wallet, WalletDocument } from 'shared/models/schema/wallet.schema';
 import { EncryptionService } from 'shared/utils/encryption.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
+import { TOKENS } from 'shared/ztarknet/tokens';
 
 @Injectable()
 export class WalletService {
@@ -149,5 +150,34 @@ export class WalletService {
       throw new NotFoundException('Wallet not found');
     }
     return wallet.address;
+  }
+
+  /**
+   * Find token address from identifier (symbol or contract address)
+   * @param identifier - Token symbol (e.g., "strk") or contract address (e.g., "0x...")
+   * @returns Token address if found, null otherwise
+   */
+  findTokenAddress(identifier: string): string | null {
+    if (!identifier) {
+      return null;
+    }
+
+    // Normalize identifier (lowercase, trim)
+    const normalized = identifier.toLowerCase().trim();
+
+    // If it's already a valid address (starts with 0x), return it directly
+    if (normalized.startsWith('0x') && normalized.length >= 3) {
+      return normalized as `0x${string}`;
+    }
+
+    // Search for token by symbol (case-insensitive)
+    for (const token of Object.values(TOKENS)) {
+      if (token.attributes.symbol.toLowerCase() === normalized) {
+        return token.attributes.address;
+      }
+    }
+
+    // Token not found
+    return null;
   }
 }

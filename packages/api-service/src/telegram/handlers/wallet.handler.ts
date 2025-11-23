@@ -124,7 +124,7 @@ export class WalletHandler {
       );
 
       // Create session
-      const session = await this.sessionService.createSession(
+      await this.sessionService.createSession(
         pending.userId,
         telegramId,
         wallet.passwordHash,
@@ -329,6 +329,10 @@ export class WalletHandler {
 
   /**
    * Handle /send command
+   * Supports formats:
+   * - /send <amount> <token_symbol> to <recipient_address>
+   * - /send <amount> <token_symbol> <recipient_address>
+   * - /send <amount> <token_address> <recipient_address>
    */
   async handleSend(ctx: Context, args: string[]): Promise<void> {
     const telegramId = ctx.from?.id.toString();
@@ -358,14 +362,56 @@ export class WalletHandler {
       if (args.length < 3) {
         await ctx.reply(
           '❌ Invalid format. Use:\n' +
-            '`/send <amount> <token_address> <recipient_address>`\n\n' +
-            'Example: `/send 100 0x123... 0x456...`',
+            '`/send <amount> <token_symbol_or_address> <recipient_address>`\n\n' +
+            'Examples:\n' +
+            '• `/send 3 strk 0x123...`\n' +
+            '• `/send 3 strk to 0x123...`\n' +
+            '• `/send 100 0xTokenAddress... 0xRecipient...`',
           { parse_mode: 'Markdown' },
         );
         return;
       }
 
-      const [amount, tokenAddress, recipientAddress] = args;
+      // Parse arguments - handle "to" keyword
+      let amount: string;
+      let tokenIdentifier: string;
+      let recipientAddress: string;
+
+      if (args.length === 3) {
+        // Format: /send <amount> <token> <recipient>
+        [amount, tokenIdentifier, recipientAddress] = args;
+      } else if (args.length === 4 && args[2].toLowerCase() === 'to') {
+        // Format: /send <amount> <token> to <recipient>
+        [amount, tokenIdentifier, , recipientAddress] = args;
+      } else {
+        // Try to find recipient address (last arg that looks like an address)
+        // and token identifier (before recipient)
+        recipientAddress = args[args.length - 1];
+        tokenIdentifier = args[args.length - 2];
+        amount = args[0];
+      }
+
+      // Validate amount
+      if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+        await ctx.reply('❌ Invalid amount. Please provide a valid positive number.');
+        return;
+      }
+
+      // Validate recipient address
+      if (!recipientAddress || !recipientAddress.startsWith('0x')) {
+        await ctx.reply('❌ Invalid recipient address. Address must start with 0x.');
+        return;
+      }
+
+      // Find token address from identifier (symbol or address)
+      const tokenAddress = this.walletService.findTokenAddress(tokenIdentifier);
+      if (!tokenAddress) {
+        await ctx.reply(
+          `❌ Token not found: "${tokenIdentifier}".\n\n` +
+            `Please use a valid token symbol (e.g., "strk") or token contract address.`,
+        );
+        return;
+      }
 
       // Prompt for password confirmation
       this.pendingOperations.set(telegramId, {
@@ -374,6 +420,7 @@ export class WalletHandler {
         sessionToken: session.sessionToken,
         amount,
         tokenAddress,
+        tokenIdentifier, // Store original identifier for display
         recipientAddress,
       });
 
@@ -420,6 +467,14 @@ export class WalletHandler {
         return;
       }
 
+      // Get token symbol for display (if identifier was a symbol, use it; otherwise try to find it)
+      let tokenSymbol = pending.tokenIdentifier;
+      if (pending.tokenIdentifier?.startsWith('0x')) {
+        // If identifier was an address, try to find the symbol
+        // For now, just use the identifier
+        tokenSymbol = pending.tokenIdentifier;
+      }
+
       // Execute transaction
       const transaction = await this.transactionService.sendToken(
         pending.userId,
@@ -427,6 +482,7 @@ export class WalletHandler {
         pending.recipientAddress,
         pending.amount,
         pending.tokenAddress,
+        tokenSymbol,
       );
 
       // Delete password messages
@@ -438,7 +494,7 @@ export class WalletHandler {
       await ctx.reply(
         `✅ Transaction sent!\n\n` +
           `Hash: \`${transaction.txHash}\`\n` +
-          `Amount: ${pending.amount}\n` +
+          `Amount: ${pending.amount} ${tokenSymbol?.toUpperCase() || 'tokens'}\n` +
           `To: \`${pending.recipientAddress}\`\n\n` +
           `Status: ${transaction.status}`,
         { parse_mode: 'Markdown' },
