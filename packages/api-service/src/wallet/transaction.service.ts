@@ -54,7 +54,7 @@ export class TransactionService {
       privateKey,
       walletAddress,
     );
-    console.log('Account', account);
+
     // Execute transaction
     let txHash: string;
     try {

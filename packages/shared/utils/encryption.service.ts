@@ -27,10 +27,7 @@ export class EncryptionService {
   /**
    * Derive encryption key from password using PBKDF2
    */
-  private deriveEncryptionKey(
-    password: string,
-    salt: string,
-  ): Buffer {
+  private deriveEncryptionKey(password: string, salt: string): Buffer {
     return crypto.pbkdf2Sync(
       password,
       salt,
@@ -66,7 +63,6 @@ export class EncryptionService {
     ]);
     const authTag = cipher.getAuthTag();
 
-    // Combine encrypted data with auth tag
     const encryptedWithTag = Buffer.concat([encrypted, authTag]);
 
     return {
@@ -107,7 +103,9 @@ export class EncryptionService {
 
       return decrypted.toString('utf8');
     } catch (error) {
-      throw new Error('Failed to decrypt private key: Invalid password or corrupted data');
+      throw new Error(
+        'Failed to decrypt private key: Invalid password or corrupted data',
+      );
     }
   }
 
@@ -118,4 +116,3 @@ export class EncryptionService {
     return crypto.randomBytes(32).toString('hex');
   }
 }
-

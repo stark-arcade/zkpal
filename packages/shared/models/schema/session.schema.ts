@@ -35,9 +35,8 @@ export class Session {
   @Prop()
   lockedUntil?: Date; // Account lockout until this time
 
-  // Temporary key storage (only populated when wallet is unlocked)
   @Prop()
-  decryptedPrivateKey?: string; // Temporarily stored decrypted private key (when unlocked)
+  decryptedPrivateKey?: string; // Will Replicate By Different Method -> Redis Encrypted Storage
 
   @Prop()
   walletAddress?: string; // Associated wallet address

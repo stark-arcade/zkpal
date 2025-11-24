@@ -165,8 +165,8 @@ export class BlockchainService {
         providerOrAccount: myProvider,
       });
       const balanceResult = await ztarknetContract.balanceOf(address);
-      console.log('Balance', balanceResult);
-      const formattedBalance = Number(balanceResult.balance) / 1e18;
+
+      const formattedBalance = Number(balanceResult) / 1e18;
       return formattedBalance.toString();
     } catch (error) {
       throw new BadRequestException(`Failed to get balance: ${error.message}`);
