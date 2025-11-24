@@ -46,32 +46,44 @@ export class TelegramService implements OnModuleInit {
         ctx.from?.last_name,
       );
 
-      let message = '👋 Welcome to Zkpal Bot!\n\n';
+      let message = '👋 *Welcome to Zkpal Bot*\n\n';
 
       if (user.isWalletCreated) {
         const wallet = await this.walletHandler.getWalletByUserId(
           user._id.toString(),
         );
-        message += '✅ You already have a wallet.\n\n';
-        if (wallet && !wallet.isDeployed) {
-          message += '⚠️ Your wallet needs to be deployed.\n';
-          message += 'Use /checkfunding to check funding status\n';
-          message += 'Use /deploywallet to deploy your wallet\n\n';
+        if (wallet) {
+          message += `📍 *Wallet Information*\n`;
+          message += `Starknet: \`${wallet.address}\`\n\n`;
         }
-        message += 'Available commands:\n';
-        message += '/login - Unlock your wallet \n';
-        message += '/balance - Check balance\n';
-        message += '/send - Send tokens\n';
-        message += '/history - View transactions\n';
-        message += '/logout - Lock wallet\n';
+        if (!wallet) {
+          message += `No wallet found for your account. Please create a new wallet using /createwallet command.\n\n`;
+        }
+
+        if (wallet && !wallet.isDeployed) {
+          message += '⚠️ *Action Required*\n';
+          message += 'Your wallet needs to be deployed before use.\n\n';
+          message += '📋 *Next Steps:*\n';
+          message += '• Use /balance to verify funding status\n';
+          message += '• Use /deploywallet to deploy your wallet\n\n';
+        }
+
+        message += '🔧 *Available Commands:*\n';
+        message += '• /login - Unlock your wallet\n';
+        message += '• /balance - Check wallet balance\n';
+        message += '• /send - Send tokens\n';
+        message += '• /history - View transaction history\n';
+        message += '• /logout - Lock your wallet\n';
       } else {
-        message += 'To get started, create a wallet:\n';
-        message += '/createwallet - Create a new wallet\n\n';
-        message += 'Your wallet will be secured with a password.\n';
-        message += 'Keep your password safe!';
+        message += '🚀 *Get Started*\n\n';
+        message += 'Create your secure wallet to begin:\n';
+        message += '• /createwallet - Create a new wallet\n\n';
+        message += '🔒 Your wallet will be secured with a password.\n';
+        message +=
+          '⚠️ *Important:* Keep your password safe and never share it!';
       }
 
-      await ctx.reply(message);
+      await ctx.reply(message, { parse_mode: 'Markdown' });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }

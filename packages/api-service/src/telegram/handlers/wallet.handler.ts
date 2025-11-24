@@ -145,7 +145,7 @@ export class WalletHandler {
           `⚠️ **Important:** Before you can use your wallet, you need to fund it with some Starknet tokens.\n\n` +
           `📝 **Next Steps:**\n` +
           `1. Send some Starknet tokens to the address above\n` +
-          `2. Use /checkfunding to verify the funding\n` +
+          `2. Use /balance to check the funding\n` +
           `3. Use /deploywallet to deploy your account\n\n` +
           `💡 Minimum required: ~0.01 STRK (for deployment fees)`,
         { parse_mode: 'Markdown' },
