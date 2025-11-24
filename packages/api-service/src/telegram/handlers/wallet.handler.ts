@@ -393,13 +393,17 @@ export class WalletHandler {
 
       // Validate amount
       if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-        await ctx.reply('❌ Invalid amount. Please provide a valid positive number.');
+        await ctx.reply(
+          '❌ Invalid amount. Please provide a valid positive number.',
+        );
         return;
       }
 
       // Validate recipient address
       if (!recipientAddress || !recipientAddress.startsWith('0x')) {
-        await ctx.reply('❌ Invalid recipient address. Address must start with 0x.');
+        await ctx.reply(
+          '❌ Invalid recipient address. Address must start with 0x.',
+        );
         return;
       }
 
