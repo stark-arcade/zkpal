@@ -131,8 +131,7 @@ export class WalletHandler {
         return;
       }
 
-      // Create wallet address (not deployed yet)
-      const { wallet, address } = await this.walletService.createWalletAddress(
+      const { wallet } = await this.walletService.createWalletAddress(
         pending.userId,
         password,
       );
@@ -153,19 +152,14 @@ export class WalletHandler {
       // Clear pending operation
       this.pendingOperations.delete(telegramId);
 
-      await ctx.reply(
-        `✅ Wallet address generated!\n\n` +
-          `📍 Address: \`${address}\`\n\n` +
-          `⚠️ **Important:** Before you can use your wallet, you need to fund it with some Starknet tokens.\n\n` +
-          `📝 **Next Steps:**\n` +
-          `1. Send some Starknet tokens to the address above\n` +
-          `2. Use /balance to check the funding\n` +
-          `3. Use /deploywallet to deploy your account\n\n` +
-          `💡 Minimum required: ~0.01 STRK (for deployment fees)`,
-        { parse_mode: 'Markdown' },
-      );
+      // Show brief success message
+      await ctx.reply('✅ Wallet created successfully!', {
+        parse_mode: 'Markdown',
+      });
+
+      // Render the deployment flow (which shows the address and next steps)
+      await this.telegramService.renderWalletDeploymentFlow(ctx, wallet);
     } catch (error) {
-      // Delete password messages on error
       await this.deletePasswordMessages(ctx, telegramId);
       this.pendingOperations.delete(telegramId);
       await ctx.reply(`❌ Failed to create wallet: ${error.message}`);
@@ -213,6 +207,8 @@ export class WalletHandler {
       // Check if already unlocked
       if (session.isWalletUnlocked()) {
         await ctx.reply('✅ Wallet is already unlocked!');
+        // Render the dashboard
+        await this.telegramService.renderDashboard(ctx);
         return;
       }
 
@@ -272,14 +268,10 @@ export class WalletHandler {
       // Clear pending operation
       this.pendingOperations.delete(telegramId);
 
-      await ctx.reply(
-        '✅ Wallet unlocked successfully!\n\n' +
-          'You can now:\n' +
-          '• Check balance: /balance\n' +
-          '• Send tokens: /send\n' +
-          '• View history: /history\n' +
-          '• Lock wallet: /logout',
-      );
+      await ctx.reply('✅ Wallet unlocked successfully!');
+
+      // Render the dashboard
+      await this.telegramService.renderDashboard(ctx);
     } catch (error) {
       // Delete password messages on error
       await this.deletePasswordMessages(ctx, telegramId);
@@ -549,14 +541,12 @@ export class WalletHandler {
         return;
       }
 
-      const operationId = this.buildMockOperationId('ptransfer', telegramId);
       await ctx.reply(
         '🤫 *Private Transfer (mock)*\n\n' +
           `Amount: ${transferPayload.amount} ${transferPayload.tokenIdentifier.toUpperCase()}\n` +
           `Sender: \`${wallet.address}\`\n` +
           `Recipient: \`${transferPayload.recipientAddress}\`\n` +
           `Token: \`${tokenAddress}\`\n` +
-          `Trace ID: \`${operationId}\`\n\n` +
           '_This is a mocked flow. No funds were moved._',
         { parse_mode: 'Markdown' },
       );
@@ -801,6 +791,8 @@ export class WalletHandler {
     messageIds.userMessageId = userMessageId;
     this.passwordMessageIds.set(telegramId, messageIds);
 
+    let deployingMessageId: number | undefined;
+
     try {
       const isValid = await this.sessionService.verifyPassword(
         pending.sessionToken,
@@ -814,12 +806,33 @@ export class WalletHandler {
         return;
       }
 
-      await ctx.reply('⏳ Deploying your wallet... This may take a moment.');
+      // Delete password messages immediately after successful verification
+      await this.deletePasswordMessages(ctx, telegramId);
+
+      // Show deploying message
+      try {
+        const deployingMessage = await ctx.reply(
+          '⏳ Deploying your wallet... This may take a moment.',
+        );
+        deployingMessageId = (deployingMessage as any)?.message_id;
+      } catch {
+        // Ignore failures for optional status message
+      }
 
       const { transactionHash, contractAddress } =
         await this.walletService.deployWallet(pending.userId, password);
 
-      await this.deletePasswordMessages(ctx, telegramId);
+      // Delete deploying message
+      if (deployingMessageId) {
+        try {
+          const chatId = (ctx.chat as any)?.id;
+          if (chatId) {
+            await ctx.telegram.deleteMessage(chatId, deployingMessageId);
+          }
+        } catch {
+          // Ignore deletion errors
+        }
+      }
 
       this.pendingOperations.delete(telegramId);
 
@@ -827,11 +840,25 @@ export class WalletHandler {
         `✅ Wallet deployed successfully!\n\n` +
           `📍 Contract Address: \`${contractAddress}\`\n` +
           `📝 Transaction Hash: \`${transactionHash}\`\n\n` +
-          `🎉 Your wallet is now ready to use!\n` +
-          `Use /login to unlock your wallet for transactions.`,
+          `🎉 Your wallet is now ready to use!`,
         { parse_mode: 'Markdown' },
       );
+
+      // Automatically render the wallet center after successful deployment
+      await this.telegramService.renderWalletCenter(ctx);
     } catch (error) {
+      // Delete deploying message on error
+      if (deployingMessageId) {
+        try {
+          const chatId = (ctx.chat as any)?.id;
+          if (chatId) {
+            await ctx.telegram.deleteMessage(chatId, deployingMessageId);
+          }
+        } catch {
+          // Ignore deletion errors
+        }
+      }
+
       // Delete password messages on error
       await this.deletePasswordMessages(ctx, telegramId);
       this.pendingOperations.delete(telegramId);
@@ -1034,28 +1061,6 @@ export class WalletHandler {
     return { amount, tokenIdentifier };
   }
 
-  // Mock Use for test
-  private buildMockPrivateBalance(telegramId: string) {
-    const seed = parseInt(telegramId.slice(-4), 10);
-    const base =
-      ((Number.isNaN(seed) ? telegramId.length * 13 : seed) % 500) + 25;
-    const spendable = base * 0.65;
-    const escrowed = base - spendable;
-
-    return {
-      spendable: spendable.toFixed(2),
-      escrowed: escrowed.toFixed(2),
-      total: base.toFixed(2),
-    };
-  }
-
-  // Shield Test Mock FUnction
-  private buildMockOperationId(prefix: string, telegramId: string): string {
-    const suffix = telegramId.slice(-4) || telegramId;
-    const entropy = Date.now().toString().slice(-6);
-    return `${prefix.toUpperCase()}-${suffix}-${entropy}`;
-  }
-
   async buildPublicBalanceView(
     telegramId: string,
     tokenAddress?: string,
@@ -1085,16 +1090,12 @@ export class WalletHandler {
       );
     }
 
-    const mockBalance = this.buildMockPrivateBalance(telegramId);
     const ownerLabel = username ? `@${username}` : telegramId;
 
     return (
       '🛡️ *Private Balance (mock)*\n\n' +
       `Owner: ${ownerLabel}\n` +
       `Vault: \`${wallet.address}\`\n\n` +
-      `Spendable: ${mockBalance.spendable} pSTRK\n` +
-      `Escrowed: ${mockBalance.escrowed} pSTRK\n` +
-      `Total: ${mockBalance.total} pSTRK\n\n` +
       '_This is mocked shielded balance data for preview purposes._'
     );
   }
@@ -1212,16 +1213,7 @@ export class WalletHandler {
         return;
       }
 
-      const operationId = this.buildMockOperationId('shield', telegramId); // Mock Function Shield
-      await ctx.reply(
-        '🛡️ *Shield Request (mock)*\n\n' +
-          `Amount: ${payload.amount} ${payload.tokenIdentifier.toUpperCase()}\n` +
-          `From: \`${wallet.address}\`\n` +
-          `Token: \`${tokenAddress}\`\n` +
-          `Batch ID: \`${operationId}\`\n\n` +
-          '_Funds will appear inside the shielded pool once the batch is processed (mock)._',
-        { parse_mode: 'Markdown' },
-      );
+      //Todo Shield Token
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -1254,16 +1246,7 @@ export class WalletHandler {
         return;
       }
 
-      const operationId = this.buildMockOperationId('unshield', telegramId);
-      await ctx.reply(
-        '🌉 *Unshield Request (mock)*\n\n' +
-          `Amount: ${payload.amount} ${payload.tokenIdentifier.toUpperCase()}\n` +
-          `Recipient: \`${payload.recipientAddress}\`\n` +
-          `Token: \`${tokenAddress}\`\n` +
-          `Reference: \`${operationId}\`\n\n` +
-          '_Assets will exit the shielded pool once the batch clears (mock)._',
-        { parse_mode: 'Markdown' },
-      );
+      // Todo Unshield Token
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }

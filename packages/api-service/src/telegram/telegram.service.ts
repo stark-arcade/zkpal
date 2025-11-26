@@ -69,47 +69,17 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      // Get or create user
-      const user = await this.usersService.createOrGetUser(
+      await this.usersService.createOrGetUser(
         telegramId,
         ctx.from?.username,
         ctx.from?.first_name,
         ctx.from?.last_name,
       );
 
-      let message = '👋 *Welcome to Zkpal Bot V1.0 *\n\n';
-
-      if (user.isWalletCreated) {
-        const wallet = await this.walletHandler.getWalletByUserId(
-          user._id.toString(),
-        );
-
-        if (!wallet) {
-          message += `No wallet found for your account. Please create a new wallet using /createwallet command.\n\n`;
-        }
-
-        if (wallet && !wallet.isDeployed) {
-          message += '⚠️ *Action Required*\n';
-          message +=
-            'Your wallet needs to be deployed before use,let deposit \n\n';
-          ((message += `📍 Address: \`${wallet.address}\`\n\n`),
-            (message += '📋 *Next Steps:*\n'));
-          message += '• Use /balance to verify funding status\n';
-          message += '• Use /deploywallet to deploy your wallet\n\n';
-        }
-        if (wallet && wallet.isDeployed) {
-          await this.renderDashboard(ctx);
-        }
-        await ctx.reply(message, { parse_mode: 'Markdown' });
-      } else {
-        message += '🚀 *Get Started*\n\n';
-        message += 'Create your secure wallet to begin:\n';
-        message += '• /createwallet - Create a new wallet\n\n';
-        message += '🔒 Your wallet will be secured with a password.\n';
-        message +=
-          '⚠️ *Important:* Keep your password safe and never share it!';
-        await ctx.reply(message, { parse_mode: 'Markdown' });
-      }
+      await ctx.reply('👋 *Welcome to Zkpal Bot V1.0*\n\n', {
+        parse_mode: 'Markdown',
+      });
+      await this.renderDashboard(ctx);
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -147,6 +117,45 @@ export class TelegramService implements OnModuleInit {
   @Action('refresh:dashboard')
   async handleDashboardRefresh(@Ctx() ctx: Context) {
     await this.renderDashboard(ctx);
+    await ctx.answerCbQuery('Dashboard refreshed');
+  }
+
+  @Action('onboarding:create_wallet')
+  async handleOnboardingCreateWallet(@Ctx() ctx: Context) {
+    await this.walletHandler.handleCreateWallet(ctx);
+    await ctx.answerCbQuery('Creating wallet...');
+  }
+
+  @Action('onboarding:check_balance')
+  async handleOnboardingCheckBalance(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    try {
+      const message =
+        await this.walletHandler.buildPublicBalanceView(telegramId);
+      await this.renderWalletDialog(ctx, message, [
+        [Markup.button.callback('⬅️ Back', 'refresh:dashboard')],
+      ]);
+      await ctx.answerCbQuery('Balance checked');
+    } catch (error) {
+      if (await this.handleLockedWalletError(ctx, error, 'balance:public')) {
+        return;
+      }
+      await this.renderWalletDialog(ctx, this.formatInlineError(error), [
+        [Markup.button.callback('⬅️ Back', 'refresh:dashboard')],
+      ]);
+      await ctx.answerCbQuery('Failed to check balance', { show_alert: true });
+    }
+  }
+
+  @Action('onboarding:deploy_wallet')
+  async handleOnboardingDeployWallet(@Ctx() ctx: Context) {
+    await this.walletHandler.handleDeployWallet(ctx);
+    await ctx.answerCbQuery('Deploying wallet...');
   }
 
   @Action('view:wallets')
@@ -334,8 +343,29 @@ export class TelegramService implements OnModuleInit {
     }
   }
 
-  private async renderDashboard(ctx: Context) {
+  async renderDashboard(ctx: Context) {
     const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usersService.getUserByTelegramId(telegramId);
+
+    // If no wallet, show creation flow
+    if (!user || !user.isWalletCreated) {
+      await this.renderWalletCreationFlow(ctx);
+      return;
+    }
+
+    const wallet = await this.walletHandler.getWalletByUserId(
+      user._id.toString(),
+    );
+
+    // If wallet not found or not deployed, show deployment flow
+    if (!wallet || !wallet.isDeployed) {
+      await this.renderWalletDeploymentFlow(ctx, wallet);
+      return;
+    }
+
+    // Wallet exists and is deployed, show normal dashboard
     const walletAddress = await this.getPrimaryWalletAddress(telegramId);
     const copy = this.buildDashboardCopy(walletAddress);
     await this.renderScreen(ctx, copy, 'dashboard');
@@ -343,10 +373,71 @@ export class TelegramService implements OnModuleInit {
 
   async renderWalletCenter(ctx: Context) {
     const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const user = await this.usersService.getUserByTelegramId(telegramId);
+
+    // If no wallet, show creation flow
+    if (!user || !user.isWalletCreated) {
+      await this.renderWalletCreationFlow(ctx);
+      return;
+    }
+
+    const wallet = await this.walletHandler.getWalletByUserId(
+      user._id.toString(),
+    );
+
+    // If wallet not found or not deployed, show deployment flow
+    if (!wallet || !wallet.isDeployed) {
+      await this.renderWalletDeploymentFlow(ctx, wallet);
+      return;
+    }
+
+    // Wallet exists and is deployed, show wallet center
     const { walletSlots, walletAddress } =
       await this.resolveWalletContext(telegramId);
     const copy = this.buildWalletCopy(walletAddress);
     await this.renderScreen(ctx, copy, 'wallets:home', { walletSlots });
+  }
+
+  private async renderWalletCreationFlow(ctx: Context) {
+    const copy =
+      'Create your secure wallet to begin using Zkpal Bot.\n\n' +
+      '🔒 Your wallet will be secured with a password.\n' +
+      '⚠️ *Important:* Keep your password safe and never share it! \n\n';
+
+    const buttons: InlineKeyboardButton[][] = [
+      [Markup.button.callback('✨ Create Wallet', 'onboarding:create_wallet')],
+      [Markup.button.callback('🔄 Refresh', 'refresh:dashboard')],
+    ];
+
+    await this.renderWalletDialog(ctx, copy, buttons);
+  }
+
+  async renderWalletDeploymentFlow(ctx: Context, wallet: any) {
+    if (!wallet) {
+      await this.renderWalletCreationFlow(ctx);
+      return;
+    }
+
+    const copy =
+      '⚠️ *Action Required*\n\n' +
+      'Your wallet needs to be deployed before use.\n\n' +
+      '📋 *Next Steps:*\n' +
+      '1. Send some STRK tokens to the address above\n' +
+      '2. Verify funding status\n' +
+      '3. Deploy your wallet\n\n' +
+      '💡 Minimum required: ~0.01 STRK (for deployment fees)';
+
+    const buttons: InlineKeyboardButton[][] = [
+      [
+        Markup.button.callback('💰 Check Balance', 'onboarding:check_balance'),
+        Markup.button.callback('🚀 Deploy Wallet', 'onboarding:deploy_wallet'),
+      ],
+      [Markup.button.callback('🔄 Refresh', 'refresh:dashboard')],
+    ];
+
+    await this.renderWalletDialog(ctx, copy, buttons);
   }
 
   private async renderScreen(
@@ -416,15 +507,12 @@ export class TelegramService implements OnModuleInit {
   }
 
   private buildWalletCopy(walletAddress?: string): string {
-    const lines = ['👛 *Wallet Center*', ''];
+    const lines = [''];
 
     if (walletAddress) {
       lines.push('Active Wallet:', `\`${walletAddress}\``);
     } else {
-      lines.push(
-        'No wallet connected yet.',
-        'Use /createwallet to get started.',
-      );
+      lines.push('No wallet connected yet.');
     }
 
     return lines.join('\n');
@@ -486,7 +574,7 @@ export class TelegramService implements OnModuleInit {
     const tokenRows = this.chunkButtons(
       tokensArray.map((token) =>
         Markup.button.callback(
-          token.attributes.name,
+          token.attributes.symbol.toUpperCase(),
           `transfer:token|type=${mode}&symbol=${token.attributes.symbol}`,
         ),
       ),
@@ -495,7 +583,6 @@ export class TelegramService implements OnModuleInit {
 
     const footer: InlineKeyboardButton[][] = [
       [Markup.button.callback('⬅️ Wallet Center', 'view:wallets')],
-      [Markup.button.callback('❌ Cancel transfer', 'transfer:cancel')],
     ];
 
     await this.renderWalletDialog(
@@ -567,7 +654,6 @@ export class TelegramService implements OnModuleInit {
         ),
       ],
       [Markup.button.callback('⬅️ Wallet Center', 'view:wallets')],
-      [Markup.button.callback('❌ Cancel transfer', 'transfer:cancel')],
     ];
   }
 
