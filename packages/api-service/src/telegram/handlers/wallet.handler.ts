@@ -577,79 +577,6 @@ export class WalletHandler {
   }
 
   /**
-   * Handle /checkfunding command
-   */
-  async handleCheckFunding(ctx: Context): Promise<void> {
-    const telegramId = ctx.from?.id.toString();
-    if (!telegramId) {
-      await ctx.reply('Unable to identify user.');
-      return;
-    }
-
-    try {
-      const user = await this.usersService.getUserByTelegramId(telegramId);
-      if (!user || !user.isWalletCreated) {
-        await ctx.reply(
-          '❌ Wallet not found. Please create a wallet first with /createwallet',
-        );
-        return;
-      }
-
-      const wallet = await this.walletService.getWalletByUserId(
-        user._id.toString(),
-      );
-      if (!wallet) {
-        await ctx.reply('❌ Wallet not found.');
-        return;
-      }
-
-      if (wallet.isDeployed) {
-        await ctx.reply('✅ Wallet is already deployed and ready to use!');
-        return;
-      }
-
-      // const fundingStatus = await this.walletService.checkWalletFundingStatus(
-      //   user._id.toString(),
-      // );
-
-      // if (fundingStatus.isFunded) {
-      //   await ctx.reply(
-      //     `✅ Wallet is funded and ready for deployment!\n\n` +
-      //       `💰 Current Balance: ${fundingStatus.balance}\n\n` +
-      //       `Use /deploywallet to deploy your account.`,
-      //   );
-      // } else {
-      //   let requireSTRK = '0.01';
-      //   if (fundingStatus.requiredAmount) {
-      //     try {
-      //       const requiredWei = BigInt(fundingStatus.requiredAmount);
-      //       const strkDivisor = BigInt('100000000000000'); // 0.001 STRK in wei
-      //       const strkValue = Number(requiredWei) / Number(strkDivisor);
-      //       requireSTRK = strkValue.toFixed(6);
-      //     } catch (e) {
-      //       // Fallback to default
-      //       requireSTRK = '0.001';
-      //     }
-      //   }
-      //   await ctx.reply(
-      //     `⏳ Wallet is not yet funded.\n\n` +
-      //       `📍 Address: \`${wallet.address}\`\n` +
-      //       `💰 Current Balance: ${fundingStatus.balance}\n` +
-      //       `💵 Required: ~${requireSTRK} STRK (for deployment fees)\n\n` +
-      //       `📝 **Next Steps:**\n` +
-      //       `1. Send at least ${requireSTRK} STRK to the address above\n` +
-      //       `2. Wait for the transaction to confirm\n` +
-      //       `3. Use /checkfunding again to verify\n` +
-      //       `4. Use /deploywallet to deploy your account`,
-      //     { parse_mode: 'Markdown' },
-      //   );
-      // }
-    } catch (error) {
-      await ctx.reply(`❌ Error: ${error.message}`);
-    }
-  }
-
-  /**
    * Handle /deploywallet command
    */
   async handleDeployWallet(ctx: Context): Promise<void> {
@@ -844,5 +771,29 @@ export class WalletHandler {
       return false;
     if (PASSWORD_CONFIG.REQUIRE_NUMBER && !/[0-9]/.test(password)) return false;
     return true;
+  }
+
+  /**
+   * Shield Token Contract From telegram Command
+   */
+  async handleShieldToken(ctx: Context): Promise<void> {
+    // Implementation for shielding token goes here
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.reply('Unable to identify user.');
+      return;
+    }
+    console.log(`Shielding token for user: ${telegramId}`);
+  }
+
+  /**
+   * Unshield Token Contract From telegram Command
+   */
+  async handleUnshieldToken(ctx: Context): Promise<void> {
+    // Implementation for unshielding token goes here
+  }
+
+  async handleSendPrivateToken(ctx: Context): Promise<void> {
+    // Implementation for sending private token goes here
   }
 }

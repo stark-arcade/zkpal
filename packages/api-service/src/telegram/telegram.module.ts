@@ -7,6 +7,7 @@ import { WalletHandler } from './handlers/wallet.handler';
 import { UsersModule } from '../users/users.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuthModule } from '../auth/auth.module';
+import { UIBuilderService } from './ui-builder.service';
 
 @Module({
   imports: [
@@ -22,6 +23,6 @@ import { AuthModule } from '../auth/auth.module';
     AuthModule,
   ],
   controllers: [],
-  providers: [TelegramService, WalletHandler],
+  providers: [TelegramService, WalletHandler, UIBuilderService],
 })
 export class TelegramModule {}
