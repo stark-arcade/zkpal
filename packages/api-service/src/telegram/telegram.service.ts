@@ -2,6 +2,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectBot, Command, Update, On, Action, Ctx } from 'nestjs-telegraf';
 import { Telegraf, Context, Markup } from 'telegraf';
+import { InlineKeyboardButton } from 'telegraf/typings/core/types/typegram';
 import { WalletHandler } from './handlers/wallet.handler';
 import { UsersService } from '../users/users.service';
 import {
@@ -10,6 +11,17 @@ import {
   UIScreenId,
   WalletSlotConfig,
 } from './ui-builder.service';
+import { TOKENS } from '@app/shared/ztarknet/tokens';
+
+type TransferMode = 'public' | 'private';
+type TransferWizardStep = 'select_token' | 'recipient' | 'amount';
+
+interface TransferWizardState {
+  mode: TransferMode;
+  step: TransferWizardStep;
+  tokenIdentifier?: string;
+  recipient?: string;
+}
 
 @Update()
 @Injectable()
@@ -21,6 +33,8 @@ export class TelegramService implements OnModuleInit {
     private readonly uiBuilder: UIBuilderService,
   ) {}
 
+  private transferWizardSessions = new Map<string, TransferWizardState>();
+
   async onModuleInit() {
     await this.bot.telegram.setMyCommands([
       { command: 'start', description: 'Start the bot' },
@@ -28,8 +42,18 @@ export class TelegramService implements OnModuleInit {
       { command: 'checkfunding', description: 'Check wallet funding status' },
       { command: 'deploywallet', description: 'Deploy your wallet' },
       { command: 'login', description: 'Unlock your wallet' },
-      { command: 'balance', description: 'Check wallet balance' },
+      {
+        command: 'balance',
+        description: 'Check wallet balance (public/private)',
+      },
       { command: 'send', description: 'Send tokens' },
+      { command: 'transfer', description: 'Public token transfer' },
+      {
+        command: 'privatetransfer',
+        description: 'Private token transfer (mocked)',
+      },
+      { command: 'shield', description: 'Shield tokens (mock)' },
+      { command: 'unshield', description: 'Unshield tokens (mock)' },
       { command: 'history', description: 'View transaction history' },
       { command: 'logout', description: 'Lock your wallet' },
       { command: 'help', description: 'Get help info' },
@@ -72,12 +96,6 @@ export class TelegramService implements OnModuleInit {
           message += '• Use /deploywallet to deploy your wallet\n\n';
         }
 
-        // message += '🔧 *Available Commands:*\n';
-        // message += '• /login - Unlock your wallet\n';
-        // message += '• /balance - Check wallet balance\n';
-        // message += '• /send - Send tokens\n';
-        // message += '• /history - View transaction history\n';
-        // message += '• /logout - Lock your wallet\n';
         await ctx.reply(message, { parse_mode: 'Markdown' });
         await this.renderDashboard(ctx);
       } else {
@@ -130,19 +148,187 @@ export class TelegramService implements OnModuleInit {
 
   @Action('view:wallets')
   async handleWalletsNavigation(@Ctx() ctx: Context) {
+    this.resetTransferWizard(ctx.from?.id.toString());
     await this.renderWalletCenter(ctx);
   }
 
   @Action('wallet:refresh')
   async handleWalletRefresh(@Ctx() ctx: Context) {
+    this.resetTransferWizard(ctx.from?.id.toString());
     await this.renderWalletCenter(ctx);
   }
 
-  @Action(
-    /view:(bags|bridge|tracker|pending|referral|automations|cashback|leaderboard|settings|bots)/,
-  )
-  async handleComingSoon(@Ctx() ctx: Context) {
-    await ctx.answerCbQuery('This section is coming soon 🚧');
+  @Action('wallet:balance')
+  async handleWalletBalanceAction(@Ctx() ctx: Context) {
+    await this.renderBalancePicker(ctx, true);
+    await ctx.answerCbQuery('Select balance type');
+  }
+
+  @Action('wallet:history')
+  async handleWalletHistoryAction(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    try {
+      const message = await this.walletHandler.buildHistoryView(telegramId);
+      await this.renderWalletDialog(ctx, message, [
+        [Markup.button.callback('🔁 Refresh', 'wallet:history')],
+        [Markup.button.callback('⬅️ Back', 'view:wallets')],
+      ]);
+      await ctx.answerCbQuery('History requested');
+    } catch (error) {
+      if (await this.handleLockedWalletError(ctx, error, 'wallet:history')) {
+        return;
+      }
+      await this.renderWalletDialog(ctx, this.formatInlineError(error), [
+        [Markup.button.callback('⬅️ Back', 'view:wallets')],
+      ]);
+      await ctx.answerCbQuery('Failed to load history', { show_alert: true });
+    }
+  }
+
+  @Action('wallet:transfer_public')
+  async handleTransferPublicAction(@Ctx() ctx: Context) {
+    await this.startTransferWizard(ctx, 'public');
+  }
+
+  @Action('wallet:transfer_private')
+  async handleTransferPrivateAction(@Ctx() ctx: Context) {
+    await this.startTransferWizard(ctx, 'private');
+  }
+
+  @Action('wallet:shield')
+  async handleShieldAction(@Ctx() ctx: Context) {
+    await this.renderWalletDialog(ctx, this.buildTokenAmountHint('shield'), [
+      [Markup.button.callback('⬅️ Back', 'view:wallets')],
+    ]);
+    await ctx.answerCbQuery('Use /shield');
+  }
+
+  @Action('wallet:unshield')
+  async handleUnshieldAction(@Ctx() ctx: Context) {
+    await this.renderWalletDialog(ctx, this.buildTransferHint('unshield'), [
+      [Markup.button.callback('⬅️ Back', 'view:wallets')],
+    ]);
+    await ctx.answerCbQuery('Use /unshield');
+  }
+
+  @Action(/transfer:token/)
+  async handleTransferTokenSelection(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    const data = (ctx.callbackQuery as any)?.data || '';
+    const { payload } = this.parseCallbackData(data);
+    const mode = payload.type as TransferMode;
+    const symbol = payload.symbol;
+
+    if (!mode || !symbol || !this.isSupportedToken(symbol)) {
+      await ctx.answerCbQuery('Unsupported token', { show_alert: true });
+      return;
+    }
+
+    const wizard = this.transferWizardSessions.get(telegramId);
+    if (!wizard || wizard.mode !== mode) {
+      this.transferWizardSessions.set(telegramId, {
+        mode,
+        step: 'recipient',
+        tokenIdentifier: symbol,
+      });
+    } else {
+      wizard.step = 'recipient';
+      wizard.tokenIdentifier = symbol;
+      wizard.recipient = undefined;
+      this.transferWizardSessions.set(telegramId, wizard);
+    }
+
+    await this.renderTransferRecipientPrompt(ctx, mode, symbol);
+    await ctx.answerCbQuery(`${symbol.toUpperCase()} selected`);
+  }
+
+  @Action('transfer:cancel')
+  async handleTransferCancel(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    this.resetTransferWizard(telegramId);
+    await this.renderWalletCenter(ctx);
+    await ctx.answerCbQuery('Transfer cancelled');
+  }
+
+  @Action('unlock:cancel')
+  async handleUnlockCancel(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (telegramId) {
+      const pending = this.walletHandler.getPendingOperation(telegramId);
+      if (pending && pending.type === 'unlock_wallet_inline') {
+        // Delete password prompt message if it exists
+        await this.walletHandler.deletePasswordMessages(ctx, telegramId);
+        this.walletHandler.clearPendingOperation(telegramId);
+      }
+    }
+    await this.renderWalletCenter(ctx);
+    await ctx.answerCbQuery('Unlock cancelled');
+  }
+
+  @Action('balance:public')
+  async handlePublicBalanceAction(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    try {
+      const message =
+        await this.walletHandler.buildPublicBalanceView(telegramId);
+      await this.renderWalletDialog(ctx, message, [
+        [Markup.button.callback('🔁 Refresh', 'balance:public')],
+        [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+      ]);
+      await ctx.answerCbQuery('Public balance requested');
+    } catch (error) {
+      if (await this.handleLockedWalletError(ctx, error, 'balance:public')) {
+        return;
+      }
+      await this.renderWalletDialog(ctx, this.formatInlineError(error), [
+        [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+      ]);
+      await ctx.answerCbQuery('Failed to load balance', { show_alert: true });
+    }
+  }
+
+  @Action('balance:private')
+  async handlePrivateBalanceAction(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    try {
+      const message = await this.walletHandler.buildPrivateBalanceView(
+        telegramId,
+        ctx.from?.username,
+      );
+      await this.renderWalletDialog(ctx, message, [
+        [Markup.button.callback('🔁 Refresh', 'balance:private')],
+        [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+      ]);
+      await ctx.answerCbQuery('Private balance requested');
+    } catch (error) {
+      if (await this.handleLockedWalletError(ctx, error, 'balance:private')) {
+        return;
+      }
+      await this.renderWalletDialog(ctx, this.formatInlineError(error), [
+        [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+      ]);
+      await ctx.answerCbQuery('Failed to load balance', { show_alert: true });
+    }
   }
 
   private async renderDashboard(ctx: Context) {
@@ -152,7 +338,7 @@ export class TelegramService implements OnModuleInit {
     await this.renderScreen(ctx, copy, 'dashboard');
   }
 
-  private async renderWalletCenter(ctx: Context) {
+  async renderWalletCenter(ctx: Context) {
     const telegramId = ctx.from?.id.toString();
     const { walletSlots, walletAddress } =
       await this.resolveWalletContext(telegramId);
@@ -227,11 +413,7 @@ export class TelegramService implements OnModuleInit {
   }
 
   private buildWalletCopy(walletAddress?: string): string {
-    const lines = [
-      '👛 *Wallet Center*',
-      '_Manage imports, transfers, and keys from one place._',
-      '',
-    ];
+    const lines = ['👛 *Wallet Center*', ''];
 
     if (walletAddress) {
       lines.push('Active Wallet:', `\`${walletAddress}\``);
@@ -243,6 +425,425 @@ export class TelegramService implements OnModuleInit {
     }
 
     return lines.join('\n');
+  }
+
+  private getCommandArguments(ctx: Context): string[] {
+    const text = (ctx.message as any)?.text || '';
+    return text
+      .split(' ')
+      .slice(1)
+      .map((chunk) => chunk.trim())
+      .filter((chunk) => chunk.length > 0);
+  }
+
+  private async renderBalancePicker(ctx: Context, includeBackButton: boolean) {
+    const rows: InlineKeyboardButton[][] = [
+      [Markup.button.callback('🌐 Public balance', 'balance:public')],
+      [Markup.button.callback('🛡️ Private balance', 'balance:private')],
+    ];
+
+    if (includeBackButton) {
+      rows.push([Markup.button.callback('⬅️ Back', 'view:wallets')]);
+    }
+
+    await this.renderWalletDialog(
+      ctx,
+      'Choose which balance you want to check:',
+      rows,
+    );
+  }
+
+  private async startTransferWizard(ctx: Context, mode: TransferMode) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery?.('Unable to identify user', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    this.transferWizardSessions.set(telegramId, {
+      mode,
+      step: 'select_token',
+    });
+
+    await this.renderTransferTokenPicker(ctx, mode);
+
+    if (ctx.callbackQuery) {
+      await ctx.answerCbQuery(
+        `Select a token to ${
+          mode === 'public' ? 'transfer' : 'privately transfer'
+        }`,
+      );
+    }
+  }
+
+  private async renderTransferTokenPicker(ctx: Context, mode: TransferMode) {
+    const tokensArray = Object.values(TOKENS);
+    const tokenRows = this.chunkButtons(
+      tokensArray.map((token) =>
+        Markup.button.callback(
+          token.attributes.name,
+          `transfer:token|type=${mode}&symbol=${token.attributes.symbol}`,
+        ),
+      ),
+      2,
+    );
+
+    const footer: InlineKeyboardButton[][] = [
+      [Markup.button.callback('⬅️ Wallet Center', 'view:wallets')],
+      [Markup.button.callback('❌ Cancel transfer', 'transfer:cancel')],
+    ];
+
+    await this.renderWalletDialog(
+      ctx,
+      mode === 'public'
+        ? 'Select a token to send publicly:'
+        : 'Select a token to transfer privately:',
+      [...tokenRows, ...footer],
+    );
+  }
+
+  private async renderTransferRecipientPrompt(
+    ctx: Context,
+    mode: TransferMode,
+    tokenSymbol: string,
+  ) {
+    const helperText =
+      `📮 Enter the Starknet address to send ${tokenSymbol.toUpperCase()} to.\n\n` +
+      '_Reply with the recipient address (must start with 0x)._';
+
+    await this.renderWalletDialog(
+      ctx,
+      helperText,
+      this.buildTransferPromptButtons(mode),
+    );
+
+    await this.sendForceReplyPrompt(
+      ctx,
+      `Enter ${tokenSymbol.toUpperCase()} recipient address (must start with 0x):`,
+    );
+  }
+
+  private async renderTransferAmountPrompt(
+    ctx: Context,
+    mode: TransferMode,
+    tokenSymbol: string,
+  ) {
+    const helperText =
+      `💸 Enter the amount of ${tokenSymbol.toUpperCase()} to send.\n\n` +
+      '_Reply with a positive number._';
+
+    await this.renderWalletDialog(
+      ctx,
+      helperText,
+      this.buildTransferPromptButtons(mode),
+    );
+
+    await this.sendForceReplyPrompt(
+      ctx,
+      `Enter ${tokenSymbol.toUpperCase()} amount to send:`,
+    );
+  }
+  private async sendForceReplyPrompt(ctx: Context, message: string) {
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        force_reply: true,
+        selective: true,
+      },
+    });
+  }
+
+  private buildTransferPromptButtons(mode: TransferMode) {
+    return [
+      [
+        Markup.button.callback(
+          '🔁 Choose another token',
+          this.getTransferActionName(mode),
+        ),
+      ],
+      [Markup.button.callback('⬅️ Wallet Center', 'view:wallets')],
+      [Markup.button.callback('❌ Cancel transfer', 'transfer:cancel')],
+    ];
+  }
+
+  private getTransferActionName(mode: TransferMode) {
+    return mode === 'public'
+      ? 'wallet:transfer_public'
+      : 'wallet:transfer_private';
+  }
+
+  private chunkButtons(
+    buttons: InlineKeyboardButton[],
+    size: number,
+  ): InlineKeyboardButton[][] {
+    const rows: InlineKeyboardButton[][] = [];
+    for (let i = 0; i < buttons.length; i += size) {
+      rows.push(buttons.slice(i, i + size));
+    }
+    return rows;
+  }
+
+  private isSupportedToken(symbol: string) {
+    const tokensArray = Object.values(TOKENS);
+    return tokensArray.some(
+      (token) => token.attributes.symbol.toLowerCase() === symbol.toLowerCase(),
+    );
+  }
+
+  private resetTransferWizard(telegramId?: string) {
+    if (!telegramId) return;
+    this.transferWizardSessions.delete(telegramId);
+  }
+
+  private async handleTransferWizardInput(
+    ctx: Context,
+    wizard: TransferWizardState,
+    text: string,
+  ): Promise<boolean> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return false;
+
+    if (wizard.step === 'select_token') {
+      await ctx.reply('Please pick a token first to continue.');
+      return true;
+    }
+
+    if (wizard.step === 'recipient') {
+      if (!text.startsWith('0x')) {
+        await ctx.reply(
+          '❌ Invalid address. Please provide a Starknet address starting with 0x.',
+        );
+        return true;
+      }
+
+      wizard.recipient = text.trim();
+      wizard.step = 'amount';
+      this.transferWizardSessions.set(telegramId, wizard);
+      await this.renderTransferAmountPrompt(
+        ctx,
+        wizard.mode,
+        wizard.tokenIdentifier ?? 'token',
+      );
+      return true;
+    }
+
+    if (wizard.step === 'amount') {
+      if (isNaN(Number(text)) || Number(text) <= 0) {
+        await ctx.reply('❌ Invalid amount. Please enter a positive number.');
+        return true;
+      }
+
+      const args = [
+        text.trim(),
+        wizard.tokenIdentifier ?? '',
+        wizard.recipient ?? '',
+      ];
+
+      this.transferWizardSessions.delete(telegramId);
+
+      if (!args[1] || !args[2]) {
+        await ctx.reply(
+          '❌ Missing token or recipient. Please restart transfer.',
+        );
+        return true;
+      }
+
+      if (wizard.mode === 'public') {
+        await this.walletHandler.handleSend(ctx, args);
+      } else {
+        await this.walletHandler.handlePrivateTransfer(ctx, args);
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  private buildTransferHint(
+    command: 'transfer' | 'privatetransfer' | 'unshield',
+  ) {
+    return (
+      `Use /${command} with amount, token and recipient.\n\n` +
+      `Format: /${command} <amount> <token_symbol_or_address> <recipient_address>\n` +
+      `Example: /${command} 3 strk 0x123...`
+    );
+  }
+
+  private buildTokenAmountHint(command: 'shield') {
+    return (
+      `Use /${command} with amount and token symbol or token address.\n\n` +
+      `Format: /${command} <amount> <token_symbol_or_address>\n` +
+      `Example: /${command} 2 strk`
+    );
+  }
+
+  private async renderWalletDialog(
+    ctx: Context,
+    body: string,
+    buttons: InlineKeyboardButton[][],
+  ): Promise<number | undefined> {
+    const telegramId = ctx.from?.id.toString();
+    const { walletAddress } = await this.resolveWalletContext(telegramId);
+    const sections = [this.buildWalletCopy(walletAddress)];
+
+    if (body) {
+      sections.push(body);
+    }
+
+    const copy = sections.filter(Boolean).join('\n\n');
+    const keyboardMarkup = Markup.inlineKeyboard(buttons);
+    const responseOptions = {
+      parse_mode: 'Markdown' as const,
+      reply_markup: keyboardMarkup.reply_markup,
+    };
+
+    if (ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(copy, responseOptions);
+
+        return (ctx.callbackQuery?.message as any)?.message_id;
+      } catch {
+        const message = await ctx.reply(copy, responseOptions);
+        return (message as any)?.message_id;
+      }
+    }
+
+    const message = await ctx.reply(copy, responseOptions);
+    return (message as any)?.message_id;
+  }
+
+  private formatInlineError(error: unknown) {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return '❌ Unable to complete the request.';
+  }
+
+  /**
+   * Handle locked wallet error by prompting for password inline
+   */
+  private async handleLockedWalletError(
+    ctx: Context,
+    error: unknown,
+    actionToContinue: string,
+  ): Promise<boolean> {
+    const errorMessage =
+      error instanceof Error ? error.message.toLowerCase() : '';
+    const isLockedError =
+      errorMessage.includes('locked') || errorMessage.includes('unlock');
+
+    if (!isLockedError) {
+      return false;
+    }
+
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      return false;
+    }
+
+    // Set up inline unlock operation
+    await this.walletHandler.setupInlineUnlock(
+      ctx,
+      telegramId,
+      actionToContinue,
+    );
+
+    // Render dialog and store prompt message ID
+    const promptMessage = await this.renderWalletDialog(
+      ctx,
+      '🔐 *Wallet Locked*\n\nPlease enter your password to unlock:',
+      [[Markup.button.callback('⬅️ Cancel', 'unlock:cancel')]],
+    );
+
+    if (promptMessage) {
+      const messageIds =
+        this.walletHandler.getPasswordMessageIds(telegramId) || {};
+      messageIds.promptMessageId = promptMessage;
+      this.walletHandler.setPasswordMessageIds(telegramId, messageIds);
+    }
+
+    await ctx.answerCbQuery('Wallet locked - enter password');
+    return true;
+  }
+
+  /**
+   * Handle inline unlock and continue with original action
+   */
+  private async handleInlineUnlockAndContinue(
+    ctx: Context,
+    password: string,
+  ): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    try {
+      const actionToContinue =
+        await this.walletHandler.handleInlineUnlockPassword(ctx, password);
+
+      if (!actionToContinue) {
+        return;
+      }
+
+      await this.continueActionAfterUnlock(ctx, actionToContinue);
+    } catch (error) {
+      await ctx.reply(
+        `❌ ${error instanceof Error ? error.message : 'Invalid password'}`,
+      );
+    }
+  }
+
+  /**
+   * Continueoriginal action after successful unlock
+   */
+  private async continueActionAfterUnlock(
+    ctx: Context,
+    action: string,
+  ): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    try {
+      //  handle router
+      switch (action) {
+        case 'balance:public': {
+          const message =
+            await this.walletHandler.buildPublicBalanceView(telegramId);
+          await this.renderWalletDialog(ctx, message, [
+            [Markup.button.callback('🔁 Refresh', 'balance:public')],
+            [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+          ]);
+          break;
+        }
+        case 'balance:private': {
+          const message = await this.walletHandler.buildPrivateBalanceView(
+            telegramId,
+            ctx.from?.username,
+          );
+          await this.renderWalletDialog(ctx, message, [
+            [Markup.button.callback('🔁 Refresh', 'balance:private')],
+            [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+          ]);
+          break;
+        }
+        case 'wallet:history': {
+          const message = await this.walletHandler.buildHistoryView(telegramId);
+          await this.renderWalletDialog(ctx, message, [
+            [Markup.button.callback('🔁 Refresh', 'wallet:history')],
+            [Markup.button.callback('⬅️ Back', 'view:wallets')],
+          ]);
+          break;
+        }
+        default:
+          // If action is not recognized, just show wallet center
+          await this.renderWalletCenter(ctx);
+      }
+    } catch (error) {
+      await this.renderWalletDialog(ctx, this.formatInlineError(error), [
+        [Markup.button.callback('⬅️ Back', 'view:wallets')],
+      ]);
+    }
   }
 
   private parseCallbackData(data: string) {
@@ -274,7 +875,18 @@ export class TelegramService implements OnModuleInit {
 
   @Command('balance')
   async onBalance(ctx: Context) {
-    await this.walletHandler.handleBalance(ctx);
+    const args = this.getCommandArguments(ctx);
+    if (args[0]?.toLowerCase() === 'private') {
+      await this.walletHandler.handlePrivateBalance(ctx);
+      return;
+    }
+
+    if (args[0]?.toLowerCase() === 'public') {
+      await this.walletHandler.handleBalance(ctx);
+      return;
+    }
+
+    await this.renderBalancePicker(ctx, false);
   }
 
   @Command('send')
@@ -287,6 +899,30 @@ export class TelegramService implements OnModuleInit {
   @Command('history')
   async onHistory(ctx: Context) {
     await this.walletHandler.handleHistory(ctx);
+  }
+
+  @Command('transfer')
+  async onTransfer(ctx: Context) {
+    const args = this.getCommandArguments(ctx);
+    await this.walletHandler.handlePublicTransfer(ctx, args);
+  }
+
+  @Command('privatetransfer')
+  async onPrivateTransfer(ctx: Context) {
+    const args = this.getCommandArguments(ctx);
+    await this.walletHandler.handlePrivateTransfer(ctx, args);
+  }
+
+  @Command('shield')
+  async onShield(ctx: Context) {
+    const args = this.getCommandArguments(ctx);
+    await this.walletHandler.handleShieldToken(ctx, args);
+  }
+
+  @Command('unshield')
+  async onUnshield(ctx: Context) {
+    const args = this.getCommandArguments(ctx);
+    await this.walletHandler.handleUnshieldToken(ctx, args);
   }
 
   @Command('logout')
@@ -308,7 +944,18 @@ export class TelegramService implements OnModuleInit {
     const text = (ctx.message as any)?.text || '';
 
     // Skip if it's a command
-    if (text.startsWith('/')) return;
+    if (text.startsWith('/')) {
+      this.resetTransferWizard(telegramId);
+      return;
+    }
+
+    const wizard = this.transferWizardSessions.get(telegramId);
+    if (wizard) {
+      const handled = await this.handleTransferWizardInput(ctx, wizard, text);
+      if (handled) {
+        return;
+      }
+    }
 
     // Check for pending operations
     if (!this.walletHandler.hasPendingOperation(telegramId)) {
@@ -326,6 +973,9 @@ export class TelegramService implements OnModuleInit {
         break;
       case 'unlock_wallet':
         await this.walletHandler.handleUnlockPassword(ctx, text);
+        break;
+      case 'unlock_wallet_inline':
+        await this.handleInlineUnlockAndContinue(ctx, text);
         break;
       case 'send_token':
         await this.walletHandler.handleSendConfirmation(ctx, text);
