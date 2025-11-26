@@ -1,9 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { InjectBot, Command, Update, On } from 'nestjs-telegraf';
-import { Telegraf, Context } from 'telegraf';
+import { InjectBot, Command, Update, On, Action, Ctx } from 'nestjs-telegraf';
+import { Telegraf, Context, Markup } from 'telegraf';
 import { WalletHandler } from './handlers/wallet.handler';
 import { UsersService } from '../users/users.service';
+import {
+  BuildKeyboardOptions,
+  UIBuilderService,
+  UIScreenId,
+  WalletSlotConfig,
+} from './ui-builder.service';
 
 @Update()
 @Injectable()
@@ -12,6 +18,7 @@ export class TelegramService implements OnModuleInit {
     @InjectBot() private readonly bot: Telegraf<Context>,
     private walletHandler: WalletHandler,
     private usersService: UsersService,
+    private readonly uiBuilder: UIBuilderService,
   ) {}
 
   async onModuleInit() {
@@ -46,16 +53,13 @@ export class TelegramService implements OnModuleInit {
         ctx.from?.last_name,
       );
 
-      let message = '👋 *Welcome to Zkpal Bot*\n\n';
+      let message = '👋 *Welcome to Zkpal Bot V1.0 *\n\n';
 
       if (user.isWalletCreated) {
         const wallet = await this.walletHandler.getWalletByUserId(
           user._id.toString(),
         );
-        if (wallet) {
-          message += `📍 *Wallet Information*\n`;
-          message += `Starknet: \`${wallet.address}\`\n\n`;
-        }
+
         if (!wallet) {
           message += `No wallet found for your account. Please create a new wallet using /createwallet command.\n\n`;
         }
@@ -68,12 +72,14 @@ export class TelegramService implements OnModuleInit {
           message += '• Use /deploywallet to deploy your wallet\n\n';
         }
 
-        message += '🔧 *Available Commands:*\n';
-        message += '• /login - Unlock your wallet\n';
-        message += '• /balance - Check wallet balance\n';
-        message += '• /send - Send tokens\n';
-        message += '• /history - View transaction history\n';
-        message += '• /logout - Lock your wallet\n';
+        // message += '🔧 *Available Commands:*\n';
+        // message += '• /login - Unlock your wallet\n';
+        // message += '• /balance - Check wallet balance\n';
+        // message += '• /send - Send tokens\n';
+        // message += '• /history - View transaction history\n';
+        // message += '• /logout - Lock your wallet\n';
+        await ctx.reply(message, { parse_mode: 'Markdown' });
+        await this.renderDashboard(ctx);
       } else {
         message += '🚀 *Get Started*\n\n';
         message += 'Create your secure wallet to begin:\n';
@@ -81,12 +87,16 @@ export class TelegramService implements OnModuleInit {
         message += '🔒 Your wallet will be secured with a password.\n';
         message +=
           '⚠️ *Important:* Keep your password safe and never share it!';
+        await ctx.reply(message, { parse_mode: 'Markdown' });
       }
-
-      await ctx.reply(message, { parse_mode: 'Markdown' });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
+  }
+
+  @Command('menu')
+  async onMenu(ctx: Context) {
+    await this.renderDashboard(ctx);
   }
 
   @Command('help')
@@ -106,6 +116,149 @@ export class TelegramService implements OnModuleInit {
       '⚠️ Keep your password safe and never share it!';
 
     await ctx.reply(message);
+  }
+
+  @Action('view:dashboard')
+  async handleDashboardAction(@Ctx() ctx: Context) {
+    await this.renderDashboard(ctx);
+  }
+
+  @Action('refresh:dashboard')
+  async handleDashboardRefresh(@Ctx() ctx: Context) {
+    await this.renderDashboard(ctx);
+  }
+
+  @Action('view:wallets')
+  async handleWalletsNavigation(@Ctx() ctx: Context) {
+    await this.renderWalletCenter(ctx);
+  }
+
+  @Action('wallet:refresh')
+  async handleWalletRefresh(@Ctx() ctx: Context) {
+    await this.renderWalletCenter(ctx);
+  }
+
+  @Action(
+    /view:(bags|bridge|tracker|pending|referral|automations|cashback|leaderboard|settings|bots)/,
+  )
+  async handleComingSoon(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('This section is coming soon 🚧');
+  }
+
+  private async renderDashboard(ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    const walletAddress = await this.getPrimaryWalletAddress(telegramId);
+    const copy = this.buildDashboardCopy(walletAddress);
+    await this.renderScreen(ctx, copy, 'dashboard');
+  }
+
+  private async renderWalletCenter(ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    const { walletSlots, walletAddress } =
+      await this.resolveWalletContext(telegramId);
+    const copy = this.buildWalletCopy(walletAddress);
+    await this.renderScreen(ctx, copy, 'wallets:home', { walletSlots });
+  }
+
+  private async renderScreen(
+    ctx: Context,
+    copy: string,
+    screenId: UIScreenId,
+    options?: BuildKeyboardOptions,
+  ) {
+    const replyMarkup = this.uiBuilder.buildScreen(screenId, options);
+    const responseOptions = {
+      parse_mode: 'Markdown' as const,
+      reply_markup: replyMarkup,
+    };
+
+    if (ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(copy, responseOptions);
+      } catch {
+        await ctx.reply(copy, responseOptions);
+      }
+      await ctx.answerCbQuery();
+      return;
+    }
+
+    await ctx.reply(copy, responseOptions);
+  }
+
+  private async resolveWalletContext(telegramId?: string) {
+    if (!telegramId) {
+      return { walletSlots: undefined, walletAddress: undefined };
+    }
+
+    const user = await this.usersService.getUserByTelegramId(telegramId);
+    if (!user || !user.isWalletCreated) {
+      return { walletSlots: undefined, walletAddress: undefined };
+    }
+
+    const wallet = await this.walletHandler.getWalletByUserId(
+      user._id.toString(),
+    );
+    if (!wallet) {
+      return { walletSlots: undefined, walletAddress: undefined };
+    }
+
+    const slots: WalletSlotConfig[] = [
+      {
+        id: wallet._id?.toString() ?? 'primary',
+        label: 'W1',
+        isSelected: true,
+      },
+    ];
+
+    return { walletSlots: slots, walletAddress: wallet.address };
+  }
+
+  private async getPrimaryWalletAddress(telegramId?: string) {
+    const context = await this.resolveWalletContext(telegramId);
+    return context.walletAddress;
+  }
+
+  private buildDashboardCopy(walletAddress?: string): string {
+    const walletLine = walletAddress
+      ? `Starknet: \`${walletAddress}\` (tab to copy)`
+      : 'Starknet: _Connect your wallet via /createwallet_';
+
+    return [walletLine, '', 'Tap a section below to continue.'].join('\n');
+  }
+
+  private buildWalletCopy(walletAddress?: string): string {
+    const lines = [
+      '👛 *Wallet Center*',
+      '_Manage imports, transfers, and keys from one place._',
+      '',
+    ];
+
+    if (walletAddress) {
+      lines.push('Active Wallet:', `\`${walletAddress}\``);
+    } else {
+      lines.push(
+        'No wallet connected yet.',
+        'Use /createwallet to get started.',
+      );
+    }
+
+    return lines.join('\n');
+  }
+
+  private parseCallbackData(data: string) {
+    const [action, query] = data.split('|');
+    const payload: Record<string, string> = {};
+
+    if (query) {
+      query.split('&').forEach((pair) => {
+        const [key, value] = pair.split('=');
+        if (key) {
+          payload[key] = value ?? '';
+        }
+      });
+    }
+
+    return { action, payload };
   }
 
   @Command('createwallet')
