@@ -90,14 +90,17 @@ export class TelegramService implements OnModuleInit {
 
         if (wallet && !wallet.isDeployed) {
           message += '⚠️ *Action Required*\n';
-          message += 'Your wallet needs to be deployed before use.\n\n';
-          message += '📋 *Next Steps:*\n';
+          message +=
+            'Your wallet needs to be deployed before use,let deposit \n\n';
+          ((message += `📍 Address: \`${wallet.address}\`\n\n`),
+            (message += '📋 *Next Steps:*\n'));
           message += '• Use /balance to verify funding status\n';
           message += '• Use /deploywallet to deploy your wallet\n\n';
         }
-
+        if (wallet && wallet.isDeployed) {
+          await this.renderDashboard(ctx);
+        }
         await ctx.reply(message, { parse_mode: 'Markdown' });
-        await this.renderDashboard(ctx);
       } else {
         message += '🚀 *Get Started*\n\n';
         message += 'Create your secure wallet to begin:\n';
