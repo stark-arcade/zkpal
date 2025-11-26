@@ -1,12 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
-import { TelegramModule } from './telegram/telegram.module';
-import { UsersModule } from './users/users.module';
-import { WalletModule } from './wallet/wallet.module';
-import { AuthModule } from './auth/auth.module';
-import { BlockchainModule } from './blockchain/blockchain.module';
-import { SchedulerModule } from './scheduler/scheduler.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import configuration from 'shared/config/configuration';
 import { validate } from 'shared/config/env.validation';
@@ -26,14 +20,6 @@ import { validate } from 'shared/config/env.validation';
       }),
       inject: [ConfigService],
     }),
-    UsersModule,
-    AuthModule,
-    WalletModule,
-    BlockchainModule,
-    TelegramModule,
-    SchedulerModule,
   ],
-  controllers: [],
-  providers: [],
 })
 export class AppModule {}
