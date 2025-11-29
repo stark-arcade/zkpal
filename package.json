@@ -22,10 +22,17 @@
     "@nestjs/mongoose": "^10.0.6",
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/schedule": "^6.0.1",
+    "@noir-lang/types": "1.0.0-beta.15",
     "bcrypt": "^6.0.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
-    "starknet": "^8.9.0"
+    "starknet": "^8.9.0",
+    "@noir-lang/noir_js": "=1.0.0-beta.5",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "dotenv": "^16.4.5",
+    "mongoose": "^8.4.1",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

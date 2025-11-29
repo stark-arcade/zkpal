@@ -21,12 +21,14 @@
   },
   "dependencies": {
     "@aztec/bb.js": "=0.87.4-starknet.1",
+    "@nestjs/mongoose": "^10.0.6",
     "@noir-lang/acvm_js": "1.0.0-beta.5",
     "@noir-lang/noir_js": "=1.0.0-beta.5",
     "@noir-lang/noirc_abi": "1.0.0-beta.5",
     "buffer": "^6.0.3",
     "ethers": "^6.15.0",
     "garaga": "=0.18.0",
+    "mongoose": "^8.4.1",
     "nestjs-telegraf": "^2.9.1",
     "shared": "workspace:shared",
     "telegraf": "^4.16.3"
