@@ -26,12 +26,27 @@ importers:
       '@nestjs/schedule':
         specifier: ^6.0.1
         version: 6.0.1(@nestjs/common@10.4.20(class-transformer@0.5.1)(class-validator@0.14.2)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.20)
+      '@noir-lang/noir_js':
+        specifier: '=1.0.0-beta.5'
+        version: 1.0.0-beta.5
       '@noir-lang/types':
         specifier: 1.0.0-beta.15
         version: 1.0.0-beta.15
       bcrypt:
         specifier: ^6.0.0
         version: 6.0.0
+      class-transformer:
+        specifier: ^0.5.1
+        version: 0.5.1
+      class-validator:
+        specifier: ^0.14.1
+        version: 0.14.2
+      dotenv:
+        specifier: ^16.4.5
+        version: 16.6.1
+      mongoose:
+        specifier: ^8.4.1
+        version: 8.20.0
       reflect-metadata:
         specifier: ^0.2.0
         version: 0.2.2
@@ -41,6 +56,9 @@ importers:
       starknet:
         specifier: ^8.9.0
         version: 8.9.0
+      uuid:
+        specifier: ^13.0.0
+        version: 13.0.0
     devDependencies:
       '@eslint/js':
         specifier: ^9.0.0
@@ -109,23 +127,14 @@ importers:
         specifier: ^7.0.0
         version: 7.18.0(eslint@8.57.1)(typescript@5.7.3)
 
-  packages/agent-service:
-    dependencies:
-      nestjs-telegraf:
-        specifier: ^2.9.1
-        version: 2.9.1(@nestjs/common@10.4.20(class-transformer@0.5.1)(class-validator@0.14.2)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.20)(reflect-metadata@0.2.2)(telegraf@4.16.3)(typescript@5.7.3)
-      shared:
-        specifier: workspace:shared
-        version: link:../shared
-      telegraf:
-        specifier: ^4.16.3
-        version: 4.16.3
-
   packages/api-service:
     dependencies:
       '@aztec/bb.js':
         specifier: '=0.87.4-starknet.1'
         version: 0.87.4-starknet.1
+      '@nestjs/mongoose':
+        specifier: ^10.0.6
+        version: 10.1.0(@nestjs/common@10.4.20(class-transformer@0.5.1)(class-validator@0.14.2)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.20)(mongoose@8.20.0)(rxjs@7.8.2)
       '@noir-lang/acvm_js':
         specifier: 1.0.0-beta.5
         version: 1.0.0-beta.5
@@ -144,6 +153,9 @@ importers:
       garaga:
         specifier: '=0.18.0'
         version: 0.18.0
+      mongoose:
+        specifier: ^8.4.1
+        version: 8.20.0
       nestjs-telegraf:
         specifier: ^2.9.1
         version: 2.9.1(@nestjs/common@10.4.20(class-transformer@0.5.1)(class-validator@0.14.2)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.20)(reflect-metadata@0.2.2)(telegraf@4.16.3)(typescript@5.7.3)
@@ -162,24 +174,6 @@ importers:
       '@nestjs/swagger':
         specifier: ^7.3.1
         version: 7.4.2(@nestjs/common@10.4.20(class-transformer@0.5.1)(class-validator@0.14.2)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.20)(class-transformer@0.5.1)(class-validator@0.14.2)(reflect-metadata@0.2.2)
-      '@noir-lang/noir_js':
-        specifier: '=1.0.0-beta.5'
-        version: 1.0.0-beta.5
-      class-transformer:
-        specifier: ^0.5.1
-        version: 0.5.1
-      class-validator:
-        specifier: ^0.14.1
-        version: 0.14.2
-      dotenv:
-        specifier: ^16.4.5
-        version: 16.6.1
-      mongoose:
-        specifier: ^8.4.1
-        version: 8.20.0
-      uuid:
-        specifier: ^13.0.0
-        version: 13.0.0
     devDependencies:
       mongodb-memory-server:
         specifier: ^10.1.4
