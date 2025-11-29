@@ -3,6 +3,7 @@ import { erc20Abi } from '@app/shared/ztarknet/abi/erc20ABI';
 import { CONTRACT_ADDRESS } from '@app/shared/ztarknet/constants';
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { parseUnits } from 'ethers';
 import {
   Account,
   ec,
@@ -12,7 +13,11 @@ import {
   CallData,
   Contract,
   uint256,
+  AccountInterface,
 } from 'starknet';
+import { Prove } from '../prove/prove.service';
+import { ZKPAL_ABI } from '@app/shared/ztarknet/abi/zkpal';
+import { TPublicInputTransact } from '@app/shared/ztarknet/type';
 
 @Injectable()
 export class BlockchainService {
@@ -208,6 +213,67 @@ export class BlockchainService {
   }
 
   /**
+   * Shield Token Contract
+   */
+  async shieldToken(
+    account: AccountInterface,
+    tokenAddress: string,
+    amount: string,
+    commitment: string,
+  ): Promise<{ txHash: string; root: string; rootId: string }> {
+    try {
+      const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
+      const parsedAmount = parseUnits(amount, 18);
+      const { transaction_hash: txHash } = await account.execute([
+        {
+          contractAddress: CONTRACT_ADDRESS.ZTARKNET_TOKEN,
+          entrypoint: 'approve',
+          calldata: CallData.compile({
+            spender: CONTRACT_ADDRESS.ZKPAL,
+            amount: uint256.bnToUint256(parsedAmount),
+          }),
+        },
+        {
+          contractAddress: CONTRACT_ADDRESS.ZKPAL,
+          entrypoint: 'shield',
+          calldata: CallData.compile({
+            commitment: Prove.shortenCommitment(commitment),
+            token: tokenAddress,
+            amount: uint256.bnToUint256(parsedAmount),
+          }),
+        },
+      ]);
+      const txReciept = await myProvider.waitForTransaction(txHash);
+
+      // Parse event NewLeafInserted to get root
+      const zkPalContract = new Contract({
+        abi: ZKPAL_ABI,
+        address: CONTRACT_ADDRESS.ZKPAL,
+        providerOrAccount: myProvider,
+      });
+
+      const events = zkPalContract.parseEvents(txReciept);
+      const newLeafEvent = events.find((ev) =>
+        Object.keys(ev).includes('contracts::zkPal::ZkPal::NewLeafInserted'),
+      );
+      const root = '0x'.concat(
+        (
+          newLeafEvent['contracts::zkPal::ZkPal::NewLeafInserted']
+            .root as bigint
+        ).toString(16),
+      );
+      const rootId = (
+        newLeafEvent['contracts::zkPal::ZkPal::NewLeafInserted']
+          .tree_id as bigint
+      ).toString();
+
+      return { txHash, root, rootId };
+    } catch (error) {
+      throw new BadRequestException(`Failed to shield token: ${error.message}`);
+    }
+  }
+
+  /**
    * Swap tokens (if implementing DEX integration)
    */
   async swapTokens(
@@ -224,6 +290,103 @@ export class BlockchainService {
       return txHash;
     } catch (error) {
       throw new BadRequestException(`Failed to swap tokens: ${error.message}`);
+    }
+  }
+
+  async privateTransact(
+    account: Account,
+    fullPoof: bigint[],
+    publicInput: TPublicInputTransact,
+  ): Promise<{
+    txHash: string;
+    rootRecipient: string;
+    rootRecipientId: string;
+    rootChange: string | undefined;
+    rootChangeId: string | undefined;
+  }> {
+    try {
+      //1. execute tx
+      const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
+      const { transaction_hash: txHash } = await account.execute(
+        [
+          {
+            contractAddress: CONTRACT_ADDRESS.ZKPAL,
+            entrypoint: publicInput.amountOut === '0' ? 'transact' : 'unshield',
+            calldata: CallData.compile({
+              input: {
+                root_ids: publicInput.rooiIdList,
+                root_hashes: publicInput.rootList,
+                nullifier_hashes: publicInput.nullifierHashes,
+                new_commitments: [
+                  publicInput.newCommitment1,
+                  publicInput.newCommitment2 || 0,
+                ],
+                amount_out: uint256.bnToUint256(
+                  parseUnits(publicInput.amountOut, 18),
+                ),
+                token_out: publicInput.tokenOut,
+                recipient_withdraw: publicInput.recipientWithdraw,
+              },
+              zkp: [],
+              proof: fullPoof,
+            }),
+          },
+        ],
+        {
+          version: 3,
+          skipValidate: true,
+        },
+      );
+
+      //2. get tx roots from tx receipt
+      const txReceipt = await myProvider.waitForTransaction(txHash);
+      const zkPalContract = new Contract({
+        abi: ZKPAL_ABI,
+        address: CONTRACT_ADDRESS.ZKPAL,
+        providerOrAccount: myProvider,
+      });
+
+      const events = zkPalContract.parseEvents(txReceipt);
+      const newLeafEvents = events.filter((ev) =>
+        Object.keys(ev).includes('contracts::zkPal::ZkPal::NewLeafInserted'),
+      );
+      let rootRecId: string;
+      let rootRec: string;
+      let rootChangeId: string;
+      let rootChange: string;
+      for (let i = 0; i < newLeafEvents.length; i++) {
+        if (i == 0) {
+          rootRecId = (
+            newLeafEvents[i]['contracts::zkPal::ZkPal::NewLeafInserted']
+              .tree_id as bigint
+          ).toString();
+          rootRec = (
+            newLeafEvents[i]['contracts::zkPal::ZkPal::NewLeafInserted']
+              .root as bigint
+          ).toString();
+        } else {
+          rootChangeId = (
+            newLeafEvents[i]['contracts::zkPal::ZkPal::NewLeafInserted']
+              .tree_id as bigint
+          ).toString();
+          rootChange = (
+            newLeafEvents[i]['contracts::zkPal::ZkPal::NewLeafInserted']
+              .root as bigint
+          ).toString();
+        }
+      }
+
+      return {
+        txHash: txHash,
+        rootRecipient: rootRec,
+        rootRecipientId: rootRecId,
+        rootChange: rootChange,
+        rootChangeId: rootChangeId,
+      };
+    } catch (error) {
+      throw new BadRequestException(
+        `Failed to private transact: ${error.message}`,
+      );
     }
   }
 

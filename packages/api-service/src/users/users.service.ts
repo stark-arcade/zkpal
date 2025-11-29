@@ -55,6 +55,15 @@ export class UsersService {
   }
 
   /**
+   * Get user by Telegram Username
+   */
+  async getUserByTelegramUsername(
+    telegramUsername: string,
+  ): Promise<UserDocument | null> {
+    return this.userModel.findOne({ telegramUsername }).exec();
+  }
+
+  /**
    * Update wallet creation status
    */
   async updateWalletStatus(

@@ -510,7 +510,7 @@ export class TelegramService implements OnModuleInit {
     const lines = [''];
 
     if (walletAddress) {
-      lines.push('Active Wallet:', `\`${walletAddress}\``);
+      lines.push(`Active Wallet: \`${walletAddress}\``);
     } else {
       lines.push('No wallet connected yet.');
     }
@@ -600,9 +600,11 @@ export class TelegramService implements OnModuleInit {
     tokenSymbol: string,
   ) {
     const helperText =
-      `📮 Enter the Starknet address to send ${tokenSymbol.toUpperCase()} to.\n\n` +
-      '_Reply with the recipient address (must start with 0x)._';
-
+      mode === 'public'
+        ? `📮 Enter the Starknet address to send ${tokenSymbol.toUpperCase()} to.\n\n` +
+          '_Reply with the recipient address (must start with 0x)._'
+        : `📮 Enter the recipient username to send ${tokenSymbol.toUpperCase()} to.\n\n` +
+          '_Reply with the recipient username._';
     await this.renderWalletDialog(
       ctx,
       helperText,
@@ -700,7 +702,7 @@ export class TelegramService implements OnModuleInit {
     }
 
     if (wizard.step === 'recipient') {
-      if (!text.startsWith('0x')) {
+      if (wizard.mode === 'public' && !text.startsWith('0x')) {
         await ctx.reply(
           '❌ Invalid address. Please provide a Starknet address starting with 0x.',
         );
@@ -726,6 +728,7 @@ export class TelegramService implements OnModuleInit {
 
       const args = [
         text.trim(),
+        wizard.mode,
         wizard.tokenIdentifier ?? '',
         wizard.recipient ?? '',
       ];
@@ -784,7 +787,7 @@ export class TelegramService implements OnModuleInit {
     const copy = sections.filter(Boolean).join('\n\n');
     const keyboardMarkup = Markup.inlineKeyboard(buttons);
     const responseOptions = {
-      parse_mode: 'Markdown' as const,
+      // parse_mode: 'Markdown' as const, // ERROR here
       reply_markup: keyboardMarkup.reply_markup,
     };
 
@@ -1071,6 +1074,15 @@ export class TelegramService implements OnModuleInit {
         break;
       case 'deploy_wallet':
         await this.walletHandler.handleDeployPassword(ctx, text);
+        break;
+      case 'shield_token':
+        await this.walletHandler.handleShieldTokenConfirmation(ctx, text);
+        break;
+      case 'private_transact':
+        await this.walletHandler.handlePrivateTransactConfirmation(ctx, text);
+        break;
+      case 'unshield_token':
+        await this.walletHandler.handleUnshieldTokenConfirmation(ctx, text);
         break;
       default:
         await ctx.reply('Unknown operation. Please try again.');

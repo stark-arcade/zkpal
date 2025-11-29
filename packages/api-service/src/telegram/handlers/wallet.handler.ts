@@ -5,9 +5,13 @@ import { UsersService } from '../../users/users.service';
 import { WalletService } from '../../wallet/wallet.service';
 import { SessionService } from '../../auth/session.service';
 import { TransactionService } from '../../wallet/transaction.service';
-
+import { Prove } from '../../prove/prove.service';
+import { formatUnits, parseUnits } from 'ethers';
 import { PASSWORD_CONFIG } from 'shared/utils/constants';
 import { TelegramService } from '../telegram.service';
+import { CommitmentService } from '../../commitment/commitment.service';
+import { InjectConnection } from '@nestjs/mongoose';
+import { Connection } from 'mongoose';
 
 type ParsedTransferPayload = {
   amount: string;
@@ -36,6 +40,8 @@ export class WalletHandler {
     private transactionService: TransactionService,
     @Inject(forwardRef(() => TelegramService))
     private telegramService: TelegramService,
+    private commitmentService: CommitmentService,
+    @InjectConnection() private connection: Connection,
   ) {}
 
   /**
@@ -513,7 +519,17 @@ export class WalletHandler {
       return;
     }
 
+    const chatId = (ctx.chat as any)?.id;
+    let sendingMessageId: number | undefined;
     try {
+      const session =
+        await this.sessionService.getSessionByTelegramId(telegramId);
+      if (!session || !session.isWalletUnlocked()) {
+        await ctx.reply(
+          '❌ Wallet is locked. Please unlock it first with /login',
+        );
+        return;
+      }
       const tokenAddress = this.walletService.findTokenAddress(
         transferPayload.tokenIdentifier,
       );
@@ -533,6 +549,18 @@ export class WalletHandler {
         return;
       }
 
+      const recipientUser = await this.usersService.getUserByTelegramUsername(
+        transferPayload.recipientAddress,
+      );
+
+      if (!recipientUser) {
+        await ctx.reply(
+          `❌ User not found: "${transferPayload.recipientAddress}".\n\n` +
+            `This occurs when the recipient is not yet using ZkPal.`,
+        );
+        return;
+      }
+
       const wallet = await this.walletService.getWalletByUserId(
         user._id.toString(),
       );
@@ -541,16 +569,105 @@ export class WalletHandler {
         return;
       }
 
-      await ctx.reply(
-        '🤫 *Private Transfer (mock)*\n\n' +
-          `Amount: ${transferPayload.amount} ${transferPayload.tokenIdentifier.toUpperCase()}\n` +
-          `Sender: \`${wallet.address}\`\n` +
-          `Recipient: \`${transferPayload.recipientAddress}\`\n` +
-          `Token: \`${tokenAddress}\`\n` +
-          '_This is a mocked flow. No funds were moved._',
-        { parse_mode: 'Markdown' },
+      const parsedAmountToSend = parseUnits(transferPayload.amount, 18);
+      const totalBalance = await this.commitmentService.getPrivateBalance(
+        telegramId,
+        tokenAddress,
       );
-      await this.telegramService.renderWalletCenter(ctx);
+      const parsedTotal = parseUnits(totalBalance, 18);
+
+      if (parsedAmountToSend > parsedTotal) {
+        await ctx.reply(
+          `❌ Insufficient balance. You only have ${totalBalance}`,
+        );
+        return;
+      }
+
+      try {
+        const sendingMessage = await ctx.reply('🚀 Generating ZK proof...');
+        sendingMessageId = (sendingMessage as any)?.message_id;
+      } catch (error) {
+        throw new Error(error);
+      }
+
+      const latestNoteIndexSender =
+        await this.commitmentService.getLatestNote(telegramId);
+      const latestNoteIndexRec = await this.commitmentService.getLatestNote(
+        transferPayload.recipientAddress,
+      );
+
+      // Get all commitments that satisfies the transact condition
+      const oldCommitments =
+        await this.commitmentService.getCommitmentsForTransact(
+          telegramId,
+          tokenAddress,
+          parsedAmountToSend,
+        );
+
+      // calculate change amount of old commitments
+      const changeAmount =
+        oldCommitments.reduce(
+          (acc, curr) => acc + parseUnits(curr.amount, 18),
+          0n,
+        ) - parsedAmountToSend;
+
+      // Generate new commitments
+      const newCommitments = await Prove.generateTransactCommitment({
+        amountToSend: parsedAmountToSend,
+        recipient: recipientUser.telegramId,
+        recipientNoteIndex: latestNoteIndexRec + 1,
+        changeAmount,
+        sender: telegramId,
+        senderNoteIndex: latestNoteIndexSender + 1,
+      });
+
+      // Generate ZK proof
+      const zkInput = await Prove.buildZKInput(
+        telegramId,
+        tokenAddress, // private token
+        parsedAmountToSend,
+        '0', // tokenOut
+        0n,
+        recipientUser.telegramId,
+        '0',
+        oldCommitments,
+        newCommitments,
+      );
+
+      const zkp = await Prove.generateZKProof(zkInput);
+
+      if (chatId && sendingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+        } catch {
+          //
+        }
+      }
+
+      // Prompt for password confirmation
+      this.pendingOperations.set(telegramId, {
+        type: 'private_transact',
+        sender: telegramId,
+        recipient: recipientUser.telegramId,
+        userId: user._id.toString(),
+        recipientId: recipientUser._id.toString(),
+        sessionToken: session.sessionToken,
+        amount: transferPayload.amount,
+        amountChange: formatUnits(changeAmount, 18),
+        token: tokenAddress,
+        tokenIdentifier: transferPayload.tokenIdentifier, // Store original identifier for display
+        oldCommitments,
+        newCommitments,
+        zkProof: zkp,
+      });
+
+      // Store prompt message ID for auto-delete
+      const promptMessage = await ctx.reply(
+        '🔐 Please confirm by entering your password:',
+      );
+      this.passwordMessageIds.set(telegramId, {
+        promptMessageId: (promptMessage as any).message_id,
+      });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -645,6 +762,153 @@ export class WalletHandler {
           `Amount: ${pending.amount} ${tokenSymbol?.toUpperCase() || 'tokens'}\n` +
           `To: \`${pending.recipientAddress}\`\n\n` +
           `Status: ${transaction.status}`,
+        { parse_mode: 'Markdown' },
+      );
+      await this.telegramService.renderWalletCenter(ctx);
+    } catch (error) {
+      // Delete password messages on error
+      await this.deletePasswordMessages(ctx, telegramId);
+      this.pendingOperations.delete(telegramId);
+      await ctx.reply(`❌ Transaction failed: ${error.message}`);
+    } finally {
+      if (chatId && verifyingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+        } catch {
+          console.log('Error when delete in send confirming');
+        }
+      }
+      if (chatId && sendingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+        } catch {
+          //
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle password confirmation for send
+   */
+  async handlePrivateTransactConfirmation(
+    ctx: Context,
+    password: string,
+  ): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const pending = this.pendingOperations.get(telegramId);
+    if (!pending || pending.type !== 'private_transact') return;
+
+    // Store user's password message ID for deletion
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
+    const chatId = (ctx.chat as any)?.id;
+    let verifyingMessageId: number | undefined;
+    let sendingMessageId: number | undefined;
+    try {
+      const verifyingMessage = await ctx.reply('⏳ Verifying password...');
+      verifyingMessageId = (verifyingMessage as any)?.message_id;
+    } catch {
+      //
+    }
+
+    try {
+      // Verify password
+      const isValid = await this.sessionService.verifyPassword(
+        pending.sessionToken,
+        password,
+      );
+
+      if (!isValid) {
+        // Delete password messages
+        await this.deletePasswordMessages(ctx, telegramId);
+        if (chatId && verifyingMessageId) {
+          try {
+            await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+          } catch {
+            // ignore
+          }
+        }
+        await ctx.reply('❌ Invalid password. Transaction cancelled.');
+        this.pendingOperations.delete(telegramId);
+        return;
+      }
+
+      // Password verified - update status
+      if (chatId && verifyingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+          verifyingMessageId = undefined;
+        } catch {
+          // ignore deletion errors
+        }
+      }
+      try {
+        const sendingMessage = await ctx.reply('🚀 Sending transaction...');
+        sendingMessageId = (sendingMessage as any)?.message_id;
+      } catch {
+        console.log('Error When confirming');
+      }
+
+      let tokenSymbol = pending.tokenIdentifier;
+      if (pending.tokenIdentifier?.startsWith('0x')) {
+        tokenSymbol = pending.tokenIdentifier;
+      }
+
+      // Execute transaction
+      const transaction = await this.transactionService.privateTransact(
+        pending.userId,
+        telegramId,
+        pending.sessionToken,
+        pending.zkProof,
+        pending.oldCommitments.map((commitment) => commitment.commitment),
+        {
+          rooiIdList: pending.oldCommitments.map(
+            (commitment) => commitment.rootId,
+          ),
+          rootList: pending.oldCommitments.map((commitment) => commitment.root),
+          nullifierHashes: pending.oldCommitments.map((commitment) =>
+            Prove.shortenCommitment(commitment.nullifier),
+          ),
+          newCommitment1: Prove.shortenCommitment(
+            pending.newCommitments.commitmentRecipient,
+          ),
+          newCommitment2: pending.newCommitments.commitmentChange
+            ? Prove.shortenCommitment(pending.newCommitments.commitmentChange)
+            : null,
+          tokenOut: '0x0',
+          amountOut: '0',
+          recipientWithdraw: '0x0',
+        },
+        {
+          recipient: pending.recipient,
+          token: pending.token,
+          amountToSend: pending.amount,
+          amountChange: pending.amountChange,
+          newCommitments: pending.newCommitments,
+        },
+        pending.tokenIdentifier,
+      );
+
+      await this.deletePasswordMessages(ctx, telegramId);
+
+      this.pendingOperations.delete(telegramId);
+
+      const receiptUser = await this.usersService.getUserByTelegramId(
+        pending.recipient,
+      );
+      await ctx.reply(
+        '🤫 *Private Transfer*\n\n' +
+          `Tx Hash: \`${transaction.txHash}\`\n` +
+          `Amount: ${pending.amount} ${tokenSymbol}\n` +
+          `Recipient: @${receiptUser.telegramUsername}\n` +
+          `Token: \`${pending.token}\`\n` +
+          '_Your token is secretly sent to the recipient._',
         { parse_mode: 'Markdown' },
       );
       await this.telegramService.renderWalletCenter(ctx);
@@ -1007,13 +1271,14 @@ export class WalletHandler {
     }
 
     let amount: string;
+    let mode: string;
     let tokenIdentifier: string;
     let recipientAddress: string;
 
-    if (args.length === 3) {
-      [amount, tokenIdentifier, recipientAddress] = args;
-    } else if (args.length === 4 && args[2].toLowerCase() === 'to') {
-      [amount, tokenIdentifier, , recipientAddress] = args;
+    if (args.length === 4) {
+      [amount, mode, tokenIdentifier, recipientAddress] = args;
+    } else if (args.length === 5 && args[3].toLowerCase() === 'to') {
+      [amount, mode, tokenIdentifier, , recipientAddress] = args;
     } else {
       recipientAddress = args[args.length - 1];
       tokenIdentifier = args[args.length - 2];
@@ -1027,14 +1292,21 @@ export class WalletHandler {
       return null;
     }
 
-    if (!recipientAddress || !recipientAddress.startsWith('0x')) {
+    if (
+      !recipientAddress ||
+      (mode === 'public' && !recipientAddress.startsWith('0x'))
+    ) {
       await ctx.reply(
         '❌ Invalid recipient address. Address must start with 0x.',
       );
       return null;
     }
 
-    return { amount, tokenIdentifier, recipientAddress };
+    return {
+      amount,
+      tokenIdentifier,
+      recipientAddress: recipientAddress.replace('@', ''),
+    };
   }
 
   private async parseTokenAmountCommand(
@@ -1092,12 +1364,14 @@ export class WalletHandler {
 
     const ownerLabel = username ? `@${username}` : telegramId;
 
-    return (
-      '🛡️ *Private Balance (mock)*\n\n' +
-      `Owner: ${ownerLabel}\n` +
-      `Vault: \`${wallet.address}\`\n\n` +
-      '_This is mocked shielded balance data for preview purposes._'
-    );
+    const balances =
+      await this.commitmentService.getPrivateBalanceList(telegramId);
+
+    let message = `🛡️ Private Balances\n\nOwner: ${ownerLabel}\n\n💰 Balances:`;
+    for (const balance of balances) {
+      message += `\n- ${balance.token}: ${balance.amount}`;
+    }
+    return message;
   }
 
   async buildHistoryView(
@@ -1186,6 +1460,15 @@ export class WalletHandler {
     }
 
     try {
+      const session =
+        await this.sessionService.getSessionByTelegramId(telegramId);
+      if (!session || !session.isWalletUnlocked()) {
+        await ctx.reply(
+          '❌ Wallet is locked. Please unlock it first with /login',
+        );
+        return;
+      }
+
       const tokenAddress = this.walletService.findTokenAddress(
         payload.tokenIdentifier,
       );
@@ -1213,7 +1496,35 @@ export class WalletHandler {
         return;
       }
 
-      //Todo Shield Token
+      const latestNoteIndex =
+        await this.commitmentService.getLatestNote(telegramId);
+      const parsedAmount = parseUnits(payload.amount, 18);
+
+      const commitmemt = await Prove.generateShieldCommitment({
+        recipient: telegramId,
+        amount: parsedAmount,
+        noteIndex: latestNoteIndex + 1,
+      });
+
+      // Prompt for password confirmation
+      this.pendingOperations.set(telegramId, {
+        type: 'shield_token',
+        telegramId,
+        userId: user._id.toString(),
+        sessionToken: session.sessionToken,
+        amount: payload.amount,
+        tokenAddress,
+        tokenIdentifier: payload.tokenIdentifier, // Store original identifier for display
+        commitment: commitmemt,
+      });
+
+      // Store prompt message ID for auto-delete
+      const promptMessage = await ctx.reply(
+        '🔐 Please confirm by entering your password:',
+      );
+      this.passwordMessageIds.set(telegramId, {
+        promptMessageId: (promptMessage as any).message_id,
+      });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
     }
@@ -1235,6 +1546,14 @@ export class WalletHandler {
     }
 
     try {
+      const session =
+        await this.sessionService.getSessionByTelegramId(telegramId);
+      if (!session || !session.isWalletUnlocked()) {
+        await ctx.reply(
+          '❌ Wallet is locked. Please unlock it first with /login',
+        );
+        return;
+      }
       const tokenAddress = this.walletService.findTokenAddress(
         payload.tokenIdentifier,
       );
@@ -1246,9 +1565,385 @@ export class WalletHandler {
         return;
       }
 
-      // Todo Unshield Token
+      const user = await this.usersService.getUserByTelegramId(telegramId);
+      if (!user || !user.isWalletCreated) {
+        await ctx.reply(
+          '❌ Wallet not found. Please create a wallet first with /createwallet',
+        );
+        return;
+      }
+
+      const wallet = await this.walletService.getWalletByUserId(
+        user._id.toString(),
+      );
+      if (!wallet) {
+        await ctx.reply('❌ Wallet not found.');
+        return;
+      }
+
+      const parsedAmountToSend = parseUnits(payload.amount, 18);
+      const totalBalance = await this.commitmentService.getPrivateBalance(
+        telegramId,
+        tokenAddress,
+      );
+      const parsedTotal = parseUnits(totalBalance, 18);
+
+      if (parsedAmountToSend > parsedTotal) {
+        await ctx.reply(
+          `❌ Insufficient balance. You only have ${totalBalance}`,
+        );
+        return;
+      }
+
+      const chatId = (ctx.chat as any)?.id;
+      let sendingMessageId: number | undefined;
+
+      try {
+        const sendingMessage = await ctx.reply('🚀 Generating ZK proof...');
+        sendingMessageId = (sendingMessage as any)?.message_id;
+      } catch (error) {
+        throw new Error(error);
+      }
+
+      const latestNoteIndexSender =
+        await this.commitmentService.getLatestNote(telegramId);
+
+      // Get all commitments that satisfies the transact condition
+      const oldCommitments =
+        await this.commitmentService.getCommitmentsForTransact(
+          telegramId,
+          tokenAddress,
+          parsedAmountToSend,
+        );
+
+      // calculate change amount of old commitments
+      const changeAmount =
+        oldCommitments.reduce(
+          (acc, curr) => acc + parseUnits(curr.amount, 18),
+          0n,
+        ) - parsedAmountToSend;
+
+      // Generate new commitments
+      const newCommitments = await Prove.generateTransactCommitment({
+        amountToSend: parsedAmountToSend,
+        recipient: payload.recipientAddress,
+        recipientNoteIndex: Date.now(),
+        changeAmount,
+        sender: telegramId,
+        senderNoteIndex: latestNoteIndexSender + 1,
+      });
+
+      // Generate ZK proof
+      const zkInput = await Prove.buildZKInput(
+        telegramId,
+        tokenAddress, // private token
+        parsedAmountToSend,
+        tokenAddress, // tokenOut
+        parsedAmountToSend,
+        payload.recipientAddress,
+        payload.recipientAddress,
+        oldCommitments,
+        newCommitments,
+      );
+
+      const zkp = await Prove.generateZKProof(zkInput);
+
+      if (chatId && sendingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+        } catch {
+          //
+        }
+      }
+
+      // Prompt for password confirmation
+      this.pendingOperations.set(telegramId, {
+        type: 'unshield_token',
+        sender: telegramId,
+        recipient: payload.recipientAddress,
+        userId: user._id.toString(),
+        sessionToken: session.sessionToken,
+        amount: payload.amount,
+        amountChange: formatUnits(changeAmount, 18),
+        token: tokenAddress,
+        tokenIdentifier: payload.tokenIdentifier, // Store original identifier for display
+        oldCommitments,
+        newCommitments,
+        zkProof: zkp,
+      });
+
+      // Store prompt message ID for auto-delete
+      const promptMessage = await ctx.reply(
+        '🔐 Please confirm by entering your password:',
+      );
+      this.passwordMessageIds.set(telegramId, {
+        promptMessageId: (promptMessage as any).message_id,
+      });
     } catch (error) {
       await ctx.reply(`❌ Error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Handle password confirmation for send
+   */
+  async handleShieldTokenConfirmation(
+    ctx: Context,
+    password: string,
+  ): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const pending = this.pendingOperations.get(telegramId);
+    if (!pending || pending.type !== 'shield_token') return;
+
+    // Store user's password message ID for deletion
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
+    const chatId = (ctx.chat as any)?.id;
+    let verifyingMessageId: number | undefined;
+    let sendingMessageId: number | undefined;
+    try {
+      const verifyingMessage = await ctx.reply('⏳ Verifying password...');
+      verifyingMessageId = (verifyingMessage as any)?.message_id;
+    } catch {
+      //
+    }
+
+    try {
+      // Verify password
+      const isValid = await this.sessionService.verifyPassword(
+        pending.sessionToken,
+        password,
+      );
+
+      if (!isValid) {
+        // Delete password messages
+        await this.deletePasswordMessages(ctx, telegramId);
+        if (chatId && verifyingMessageId) {
+          try {
+            await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+          } catch {
+            // ignore
+          }
+        }
+        await ctx.reply('❌ Invalid password. Transaction cancelled.');
+        this.pendingOperations.delete(telegramId);
+        return;
+      }
+
+      // Password verified - update status
+      if (chatId && verifyingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+          verifyingMessageId = undefined;
+        } catch {
+          // ignore deletion errors
+        }
+      }
+      try {
+        const sendingMessage = await ctx.reply('🚀 Sending transaction...');
+        sendingMessageId = (sendingMessage as any)?.message_id;
+      } catch {
+        console.log('Error When confirming');
+      }
+
+      let tokenSymbol = pending.tokenIdentifier;
+      if (pending.tokenIdentifier?.startsWith('0x')) {
+        tokenSymbol = pending.tokenIdentifier;
+      }
+
+      // Execute transaction
+      const transaction = await this.transactionService.shieldToken(
+        pending.userId,
+        telegramId,
+        pending.sessionToken,
+        pending.amount,
+        pending.tokenAddress,
+        pending.commitment,
+        tokenSymbol,
+      );
+
+      await this.deletePasswordMessages(ctx, telegramId);
+
+      this.pendingOperations.delete(telegramId);
+
+      await ctx.reply(
+        `✅ Transaction sent!\n\n` +
+          `Hash: \`${transaction.txHash}\`\n` +
+          `Amount: ${pending.amount} ${tokenSymbol?.toUpperCase() || 'tokens'}\n` +
+          // `To: \`${pending.recipientAddress}\`\n\n` +
+          `Status: ${transaction.status}`,
+        { parse_mode: 'Markdown' },
+      );
+      await this.telegramService.renderWalletCenter(ctx);
+    } catch (error) {
+      // Delete password messages on error
+      await this.deletePasswordMessages(ctx, telegramId);
+      this.pendingOperations.delete(telegramId);
+      await ctx.reply(`❌ Transaction failed: ${error.message}`);
+    } finally {
+      if (chatId && verifyingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+        } catch {
+          console.log('Error when delete in send confirming');
+        }
+      }
+      if (chatId && sendingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+        } catch {
+          //
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle password confirmation for unshield
+   */
+  async handleUnshieldTokenConfirmation(
+    ctx: Context,
+    password: string,
+  ): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const pending = this.pendingOperations.get(telegramId);
+    if (!pending || pending.type !== 'unshield_token') return;
+
+    // Store user's password message ID for deletion
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
+    const chatId = (ctx.chat as any)?.id;
+    let verifyingMessageId: number | undefined;
+    let sendingMessageId: number | undefined;
+    try {
+      const verifyingMessage = await ctx.reply('⏳ Verifying password...');
+      verifyingMessageId = (verifyingMessage as any)?.message_id;
+    } catch {
+      //
+    }
+
+    try {
+      // Verify password
+      const isValid = await this.sessionService.verifyPassword(
+        pending.sessionToken,
+        password,
+      );
+
+      if (!isValid) {
+        // Delete password messages
+        await this.deletePasswordMessages(ctx, telegramId);
+        if (chatId && verifyingMessageId) {
+          try {
+            await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+          } catch {
+            // ignore
+          }
+        }
+        await ctx.reply('❌ Invalid password. Transaction cancelled.');
+        this.pendingOperations.delete(telegramId);
+        return;
+      }
+
+      // Password verified - update status
+      if (chatId && verifyingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+          verifyingMessageId = undefined;
+        } catch {
+          // ignore deletion errors
+        }
+      }
+      try {
+        const sendingMessage = await ctx.reply('🚀 Sending transaction...');
+        sendingMessageId = (sendingMessage as any)?.message_id;
+      } catch {
+        console.log('Error When confirming');
+      }
+
+      let tokenSymbol = pending.tokenIdentifier;
+      if (pending.tokenIdentifier?.startsWith('0x')) {
+        tokenSymbol = pending.tokenIdentifier;
+      }
+
+      // Execute transaction
+      const transaction = await this.transactionService.privateTransact(
+        pending.userId,
+        telegramId,
+        pending.sessionToken,
+        pending.zkProof,
+        pending.oldCommitments.map((commitment) => commitment.commitment),
+        {
+          rooiIdList: pending.oldCommitments.map(
+            (commitment) => commitment.rootId,
+          ),
+          rootList: pending.oldCommitments.map((commitment) => commitment.root),
+          nullifierHashes: pending.oldCommitments.map((commitment) =>
+            Prove.shortenCommitment(commitment.nullifier),
+          ),
+          newCommitment1: Prove.shortenCommitment(
+            pending.newCommitments.commitmentRecipient,
+          ),
+          newCommitment2: pending.newCommitments.commitmentChange
+            ? Prove.shortenCommitment(pending.newCommitments.commitmentChange)
+            : null,
+          tokenOut: pending.token,
+          amountOut: pending.amount,
+          recipientWithdraw: pending.recipient,
+        },
+        {
+          recipient: pending.recipient,
+          token: pending.token,
+          amountToSend: pending.amount,
+          amountChange: pending.amountChange,
+          newCommitments: pending.newCommitments,
+        },
+        pending.tokenIdentifier,
+      );
+
+      await this.deletePasswordMessages(ctx, telegramId);
+
+      this.pendingOperations.delete(telegramId);
+
+      await ctx.reply(
+        `✅ Transaction sent!\n\n` +
+          `Hash: \`${transaction.txHash}\`\n` +
+          `Amount: ${pending.amount} ${tokenSymbol?.toUpperCase() || 'tokens'}\n` +
+          `Recipient: \`${pending.recipient}\`\n\n` +
+          `Status: ${transaction.status}\n\n` +
+          `_Your token is unshielded._`,
+        { parse_mode: 'Markdown' },
+      );
+      await this.telegramService.renderWalletCenter(ctx);
+    } catch (error) {
+      // Delete password messages on error
+      await this.deletePasswordMessages(ctx, telegramId);
+      this.pendingOperations.delete(telegramId);
+      await ctx.reply(`❌ Transaction failed: ${error.message}`);
+    } finally {
+      if (chatId && verifyingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+        } catch {
+          console.log('Error when delete in send confirming');
+        }
+      }
+      if (chatId && sendingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+        } catch {
+          //
+        }
+      }
     }
   }
 }

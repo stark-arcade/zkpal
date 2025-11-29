@@ -12,12 +12,19 @@ import {
 import { SessionService } from '../auth/session.service';
 import { WalletService } from './wallet.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
+import { Commitment, CommitmentDocument } from '@app/shared/models/schema';
+import {
+  TPublicInputTransact,
+  TTransactCommitment,
+} from '@app/shared/ztarknet/type';
 
 @Injectable()
 export class TransactionService {
   constructor(
     @InjectModel(Transaction.name)
     private transactionModel: Model<TransactionDocument>,
+    @InjectModel(Commitment.name)
+    private commitmentModel: Model<CommitmentDocument>,
     private sessionService: SessionService,
     private walletService: WalletService,
     private blockchainService: BlockchainService,
@@ -74,7 +81,7 @@ export class TransactionService {
       walletAddress,
       txHash,
       type: 'send',
-      tokenAddress,
+      tokenAddress: tokenAddress.toLowerCase(),
       tokenSymbol,
       amount,
       recipientAddress: toAddress,
@@ -82,6 +89,224 @@ export class TransactionService {
     });
 
     await transaction.save();
+
+    // Update session activity
+    await this.sessionService.updateActivity(sessionToken);
+
+    // Optionally lock wallet after transaction (more secure)
+    // await this.sessionService.lockWallet(sessionToken);
+
+    return transaction;
+  }
+
+  async privateTransact(
+    userId: string,
+    telegramId: string,
+    sessionToken: string,
+    zkp: bigint[],
+    oldCommitmentHashes: string[],
+    publicInput: TPublicInputTransact,
+    secretInput: {
+      recipient: string; // telegramId of recipient
+      token: string;
+      amountToSend: string;
+      amountChange: string;
+      newCommitments: TTransactCommitment;
+    },
+    tokenSymbol?: string,
+  ) {
+    // Get session and verify wallet is unlocked
+    const isUnlocked = await this.sessionService.isWalletUnlocked(sessionToken);
+    if (!isUnlocked) {
+      throw new UnauthorizedException(
+        'Wallet is not unlocked. Please unlock it first.',
+      );
+    }
+
+    // Get decrypted private key
+    const privateKey =
+      await this.sessionService.getDecryptedPrivateKey(sessionToken);
+
+    // Get wallet address
+    const walletAddress = await this.walletService.getWalletAddress(userId);
+
+    // Create account instance
+    const account = await this.blockchainService.createAccountFromPrivateKey(
+      privateKey,
+      walletAddress,
+    );
+
+    // Execute transaction
+    let txReciept: {
+      txHash: string;
+      rootRecipient: string;
+      rootRecipientId: string;
+      rootChange: string | undefined;
+      rootChangeId: string | undefined;
+    };
+    try {
+      txReciept = await this.blockchainService.privateTransact(
+        account,
+        zkp,
+        publicInput,
+      );
+    } catch (error) {
+      throw new Error(`Transaction failed: ${error.message}`);
+    }
+
+    // Create transaction record
+    const transaction = new this.transactionModel({
+      userId,
+      walletAddress,
+      txHash: txReciept.txHash,
+      type: publicInput.amountOut === '0' ? 'private_transact' : 'unshield',
+      tokenAddress: secretInput.token.toLowerCase(),
+      tokenSymbol,
+      amount: secretInput.amountToSend,
+      recipientAddress: secretInput.recipient.toLowerCase(),
+      status: 'confirmed',
+    });
+    await transaction.save();
+
+    // Mark old commitment as spent
+    await this.commitmentModel.updateMany(
+      {
+        commitment: { $in: oldCommitmentHashes },
+      },
+      { $set: { isSpent: true } },
+    );
+
+    // Create new commitment for recipient if transact mode is not unshield
+    if (publicInput.amountOut === '0') {
+      const newRecCommitment = new this.commitmentModel({
+        owner: secretInput.recipient,
+        commitment: secretInput.newCommitments.commitmentRecipient,
+        secret: secretInput.newCommitments.secretRecipient,
+        nullifier: secretInput.newCommitments.nullifierRecipient,
+        note: secretInput.newCommitments.noteRecipient,
+        noteIndex: secretInput.newCommitments.recipientNoteIndex,
+        amount: secretInput.amountToSend,
+        token: secretInput.token.toLowerCase(),
+        tokenSymbol,
+        root: txReciept.rootRecipient,
+        rootId: txReciept.rootRecipientId,
+        isSpent: false,
+      });
+      await newRecCommitment.save();
+    }
+
+    // Create new commitment for change if exists
+    if (secretInput.newCommitments.commitmentChange) {
+      const newChangeCommitment = new this.commitmentModel({
+        owner: telegramId,
+        commitment: secretInput.newCommitments.commitmentChange,
+        secret: secretInput.newCommitments.secretChange,
+        nullifier: secretInput.newCommitments.nullifierChange,
+        note: secretInput.newCommitments.noteChange,
+        noteIndex: secretInput.newCommitments.senderNoteIndex,
+        amount: secretInput.amountChange,
+        token: secretInput.token.toLowerCase(),
+        tokenSymbol,
+        root: txReciept.rootChange,
+        rootId: txReciept.rootChangeId,
+        isSpent: false,
+      });
+      await newChangeCommitment.save();
+    }
+
+    // Update session activity
+    await this.sessionService.updateActivity(sessionToken);
+
+    // Optionally lock wallet after transaction (more secure)
+    // await this.sessionService.lockWallet(sessionToken);
+
+    return transaction;
+  }
+
+  /**
+   * Execute shield transaction
+   */
+  async shieldToken(
+    userId: string,
+    telegramId: string,
+    sessionToken: string,
+    amount: string,
+    tokenAddress: string,
+    input: {
+      commitment: string;
+      secret: string;
+      nullifier: string;
+      note: string;
+      noteIndex: number;
+    },
+    tokenSymbol?: string,
+  ): Promise<TransactionDocument> {
+    // Get session and verify wallet is unlocked
+    const isUnlocked = await this.sessionService.isWalletUnlocked(sessionToken);
+    if (!isUnlocked) {
+      throw new UnauthorizedException(
+        'Wallet is not unlocked. Please unlock it first.',
+      );
+    }
+
+    // Get decrypted private key
+    const privateKey =
+      await this.sessionService.getDecryptedPrivateKey(sessionToken);
+
+    // Get wallet address
+    const walletAddress = await this.walletService.getWalletAddress(userId);
+
+    // Create account instance
+    const account = await this.blockchainService.createAccountFromPrivateKey(
+      privateKey,
+      walletAddress,
+    );
+
+    // Execute transaction
+    let txReciept: { txHash: string; root: string; rootId: string };
+    try {
+      txReciept = await this.blockchainService.shieldToken(
+        account,
+        tokenAddress,
+        amount,
+        input.commitment,
+      );
+    } catch (error) {
+      throw new BadRequestException(`Transaction failed: ${error.message}`);
+    }
+
+    // Create transaction record
+    const transaction = new this.transactionModel({
+      userId,
+      walletAddress,
+      txHash: txReciept.txHash,
+      type: 'shield',
+      tokenAddress: tokenAddress.toLowerCase(),
+      tokenSymbol,
+      amount,
+      recipientAddress: null,
+      status: 'confirmed',
+    });
+
+    await transaction.save();
+
+    // Create commitment
+    const newCommitment = new this.commitmentModel({
+      owner: telegramId,
+      commitment: input.commitment,
+      secret: input.secret,
+      nullifier: input.nullifier,
+      note: input.note,
+      noteIndex: input.noteIndex,
+      amount,
+      token: tokenAddress.toLowerCase(),
+      tokenSymbol,
+      root: txReciept.root,
+      rootId: txReciept.rootId,
+      isSpent: false,
+    });
+
+    await newCommitment.save();
 
     // Update session activity
     await this.sessionService.updateActivity(sessionToken);

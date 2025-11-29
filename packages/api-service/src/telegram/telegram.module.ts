@@ -8,6 +8,7 @@ import { UsersModule } from '../users/users.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuthModule } from '../auth/auth.module';
 import { UIBuilderService } from './ui-builder.service';
+import { CommitmentModule } from '../commitment/commitment.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { UIBuilderService } from './ui-builder.service';
     UsersModule,
     WalletModule,
     AuthModule,
+    CommitmentModule,
   ],
   controllers: [],
   providers: [TelegramService, WalletHandler, UIBuilderService],
