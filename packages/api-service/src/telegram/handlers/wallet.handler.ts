@@ -907,7 +907,7 @@ export class WalletHandler {
           `Tx Hash: \`${transaction.txHash}\`\n` +
           `Amount: ${pending.amount} ${tokenSymbol}\n` +
           `Recipient: @${receiptUser.telegramUsername}\n` +
-          `Token: \`${pending.token}\`\n` +
+          `Token: \`${tokenSymbol}\`\n` +
           '_Your token is secretly sent to the recipient._',
         { parse_mode: 'Markdown' },
       );
