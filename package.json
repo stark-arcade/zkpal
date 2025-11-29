@@ -22,6 +22,7 @@
     "@nestjs/mongoose": "^10.0.6",
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/schedule": "^6.0.1",
+    "@noir-lang/types": "1.0.0-beta.15",
     "bcrypt": "^6.0.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
