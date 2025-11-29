@@ -1294,7 +1294,8 @@ export class WalletHandler {
 
     if (
       !recipientAddress ||
-      (mode === 'public' && !recipientAddress.startsWith('0x'))
+      (mode === 'public' && !recipientAddress.startsWith('0x')) ||
+      (command === 'unshield' && !recipientAddress.startsWith('0x'))
     ) {
       await ctx.reply(
         '❌ Invalid recipient address. Address must start with 0x.',
