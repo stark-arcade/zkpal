@@ -15,7 +15,13 @@ export class Transaction {
   txHash: string; // Blockchain transaction hash
 
   @Prop({ required: true })
-  type: 'send' | 'receive' | 'swap'; // Transaction type
+  type:
+    | 'send'
+    | 'receive'
+    | 'swap'
+    | 'shield'
+    | 'private_transact'
+    | 'unshield'; // Transaction type
 
   @Prop({ required: true })
   tokenAddress: string; // Token contract address
@@ -26,8 +32,8 @@ export class Transaction {
   @Prop({ required: true })
   amount: string; // Amount (as string for precision)
 
-  @Prop({ required: true })
-  recipientAddress: string; // Recipient address
+  @Prop()
+  recipientAddress: string | null; // Recipient address or telegramId (null for shield)
 
   @Prop({ default: 'pending' })
   status: 'pending' | 'confirmed' | 'failed';

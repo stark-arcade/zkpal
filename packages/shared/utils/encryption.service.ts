@@ -115,4 +115,15 @@ export class EncryptionService {
   generateSessionToken(): string {
     return crypto.randomBytes(32).toString('hex');
   }
+
+  /**
+   * Convert string to hex format
+   */
+  static convertStringToHex(str) {
+    if (str.startsWith('0x')) {
+      return str;
+    }
+
+    return `0x${Buffer.from(str, 'utf8').toString('hex')}`;
+  }
 }

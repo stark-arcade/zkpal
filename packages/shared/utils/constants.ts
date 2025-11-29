@@ -26,3 +26,7 @@ export const NETWORK_CONFIG = {
   DEFAULT_NETWORK: 'ztarknet',
   CONFIRMATION_BLOCKS: 1, // Blocks to wait for confirmation
 } as const;
+
+export const MASK_251 = BigInt(
+  '0x7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+);
