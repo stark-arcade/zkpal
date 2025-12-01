@@ -19,7 +19,6 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
-    "@nestjs/mongoose": "^10.0.6",
     "@nestjs/swagger": "^7.3.1"
   },
   "devDependencies": {

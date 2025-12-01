@@ -85,16 +85,13 @@ export class TransactionService {
       tokenSymbol,
       amount,
       recipientAddress: toAddress,
-      status: 'pending',
+      // status: 'pending',
+      status: 'confirmed', // !TODO Will Build A cron job to checking fail or pending confirm -> Next
     });
 
     await transaction.save();
 
-    // Update session activity
     await this.sessionService.updateActivity(sessionToken);
-
-    // Optionally lock wallet after transaction (more secure)
-    // await this.sessionService.lockWallet(sessionToken);
 
     return transaction;
   }
@@ -216,9 +213,6 @@ export class TransactionService {
 
     // Update session activity
     await this.sessionService.updateActivity(sessionToken);
-
-    // Optionally lock wallet after transaction (more secure)
-    // await this.sessionService.lockWallet(sessionToken);
 
     return transaction;
   }
@@ -371,8 +365,8 @@ export class TransactionService {
       type: 'swap',
       tokenAddress: tokenIn,
       amount: amountIn,
-      recipientAddress: tokenOut, // Store tokenOut in recipientAddress for swaps
-      status: 'pending',
+      recipientAddress: tokenOut,
+      status: 'confirmed',
     });
 
     await transaction.save();
@@ -388,7 +382,7 @@ export class TransactionService {
    */
   async getTransactionHistory(
     userId: string,
-    limit: number = 50,
+    limit: number = 5,
     offset: number = 0,
   ): Promise<TransactionDocument[]> {
     return this.transactionModel

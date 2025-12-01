@@ -437,66 +437,55 @@ export class WalletHandler {
       return;
     }
 
-    try {
-      const user = await this.usersService.getUserByTelegramId(telegramId);
-      if (!user || !user.isWalletCreated) {
-        await ctx.reply(
-          '❌ Wallet not found. Please create a wallet first with /createwallet',
-        );
-        return;
-      }
-
-      const session =
-        await this.sessionService.getSessionByTelegramId(telegramId);
-      if (!session || !session.isWalletUnlocked()) {
-        await ctx.reply(
-          '❌ Wallet is locked. Please unlock it first with /login',
-        );
-        return;
-      }
-
-      const transferPayload = await this.parseTransferCommand(
-        ctx,
-        args,
-        'send',
+    const user = await this.usersService.getUserByTelegramId(telegramId);
+    if (!user || !user.isWalletCreated) {
+      throw new Error(
+        '❌ Wallet not found. Please create a wallet first with /createwallet',
       );
-      if (!transferPayload) {
-        return;
-      }
-
-      // Find token address from identifier (symbol or address)
-      const tokenAddress = this.walletService.findTokenAddress(
-        transferPayload.tokenIdentifier,
-      );
-      if (!tokenAddress) {
-        await ctx.reply(
-          `❌ Token not found: "${transferPayload.tokenIdentifier}".\n\n` +
-            `Please use a valid token symbol (e.g., "strk") or token contract address.`,
-        );
-        return;
-      }
-
-      // Prompt for password confirmation
-      this.pendingOperations.set(telegramId, {
-        type: 'send_token',
-        userId: user._id.toString(),
-        sessionToken: session.sessionToken,
-        amount: transferPayload.amount,
-        tokenAddress,
-        tokenIdentifier: transferPayload.tokenIdentifier, // Store original identifier for display
-        recipientAddress: transferPayload.recipientAddress,
-      });
-
-      // Store prompt message ID for auto-delete
-      const promptMessage = await ctx.reply(
-        '🔐 Please confirm by entering your password:',
-      );
-      this.passwordMessageIds.set(telegramId, {
-        promptMessageId: (promptMessage as any).message_id,
-      });
-    } catch (error) {
-      await ctx.reply(`❌ Error: ${error.message}`);
     }
+
+    const session =
+      await this.sessionService.getSessionByTelegramId(telegramId);
+    if (!session || !session.isWalletUnlocked()) {
+      throw new Error(
+        '❌ Wallet is locked. Please unlock it first with /login',
+      );
+    }
+
+    const transferPayload = await this.parseTransferCommand(ctx, args, 'send');
+    if (!transferPayload) {
+      return;
+    }
+
+    // Find token address from identifier (symbol or address)
+    const tokenAddress = this.walletService.findTokenAddress(
+      transferPayload.tokenIdentifier,
+    );
+    if (!tokenAddress) {
+      throw new Error(
+        `❌ Token not found: "${transferPayload.tokenIdentifier}".\n\n` +
+          `Please use a valid token symbol (e.g., "strk") or token contract address.`,
+      );
+    }
+
+    // Prompt for password confirmation
+    this.pendingOperations.set(telegramId, {
+      type: 'send_token',
+      userId: user._id.toString(),
+      sessionToken: session.sessionToken,
+      amount: transferPayload.amount,
+      tokenAddress,
+      tokenIdentifier: transferPayload.tokenIdentifier, // Store original identifier for display
+      recipientAddress: transferPayload.recipientAddress,
+    });
+
+    // Store prompt message ID for auto-delete
+    const promptMessage = await ctx.reply(
+      '🔐 Please confirm by entering your password:',
+    );
+    this.passwordMessageIds.set(telegramId, {
+      promptMessageId: (promptMessage as any).message_id,
+    });
   }
 
   async handlePublicTransfer(ctx: Context, args: string[]): Promise<void> {
@@ -521,156 +510,148 @@ export class WalletHandler {
 
     const chatId = (ctx.chat as any)?.id;
     let sendingMessageId: number | undefined;
+
+    const session =
+      await this.sessionService.getSessionByTelegramId(telegramId);
+    if (!session || !session.isWalletUnlocked()) {
+      throw new Error(
+        '❌ Wallet is locked. Please unlock it first with /login',
+      );
+    }
+    const tokenAddress = this.walletService.findTokenAddress(
+      transferPayload.tokenIdentifier,
+    );
+    if (!tokenAddress) {
+      throw new Error(
+        `❌ Token not found: "${transferPayload.tokenIdentifier}".\n\n` +
+          `Please use a valid token symbol (e.g., "strk") or token contract address.`,
+      );
+    }
+
+    const user = await this.usersService.getUserByTelegramId(telegramId);
+    if (!user || !user.isWalletCreated) {
+      await ctx.reply(
+        '❌ Wallet not found. Please create a wallet first with /createwallet',
+      );
+      return;
+    }
+
+    const recipientUser = await this.usersService.getUserByTelegramUsername(
+      transferPayload.recipientAddress,
+    );
+
+    if (!recipientUser) {
+      await ctx.reply(
+        `❌ User not found: "${transferPayload.recipientAddress}".\n\n` +
+          `This occurs when the recipient is not yet using ZkPal.`,
+      );
+      return;
+    }
+
+    const wallet = await this.walletService.getWalletByUserId(
+      user._id.toString(),
+    );
+    if (!wallet) {
+      throw new Error('❌ Wallet not found.');
+    }
+
+    const parsedAmountToSend = parseUnits(transferPayload.amount, 18);
+    const totalBalance = await this.commitmentService.getPrivateBalance(
+      telegramId,
+      tokenAddress,
+    );
+    const parsedTotal = parseUnits(totalBalance, 18);
+
+    if (parsedAmountToSend > parsedTotal) {
+      await ctx.reply(`❌ Insufficient balance. You only have ${totalBalance}`);
+      return;
+    }
+
     try {
-      const session =
-        await this.sessionService.getSessionByTelegramId(telegramId);
-      if (!session || !session.isWalletUnlocked()) {
-        await ctx.reply(
-          '❌ Wallet is locked. Please unlock it first with /login',
-        );
-        return;
-      }
-      const tokenAddress = this.walletService.findTokenAddress(
-        transferPayload.tokenIdentifier,
-      );
-      if (!tokenAddress) {
-        await ctx.reply(
-          `❌ Token not found: "${transferPayload.tokenIdentifier}".\n\n` +
-            `Please use a valid token symbol (e.g., "strk") or token contract address.`,
-        );
-        return;
-      }
+      const sendingMessage = await ctx.reply('🚀 Generating ZK proof...');
+      sendingMessageId = (sendingMessage as any)?.message_id;
+    } catch (error) {
+      throw new Error(error);
+    }
 
-      const user = await this.usersService.getUserByTelegramId(telegramId);
-      if (!user || !user.isWalletCreated) {
-        await ctx.reply(
-          '❌ Wallet not found. Please create a wallet first with /createwallet',
-        );
-        return;
-      }
+    const latestNoteIndexSender =
+      await this.commitmentService.getLatestNote(telegramId);
+    const latestNoteIndexRec = await this.commitmentService.getLatestNote(
+      transferPayload.recipientAddress,
+    );
 
-      const recipientUser = await this.usersService.getUserByTelegramUsername(
-        transferPayload.recipientAddress,
-      );
-
-      if (!recipientUser) {
-        await ctx.reply(
-          `❌ User not found: "${transferPayload.recipientAddress}".\n\n` +
-            `This occurs when the recipient is not yet using ZkPal.`,
-        );
-        return;
-      }
-
-      const wallet = await this.walletService.getWalletByUserId(
-        user._id.toString(),
-      );
-      if (!wallet) {
-        await ctx.reply('❌ Wallet not found.');
-        return;
-      }
-
-      const parsedAmountToSend = parseUnits(transferPayload.amount, 18);
-      const totalBalance = await this.commitmentService.getPrivateBalance(
+    // Get all commitments that satisfies the transact condition
+    const oldCommitments =
+      await this.commitmentService.getCommitmentsForTransact(
         telegramId,
         tokenAddress,
-      );
-      const parsedTotal = parseUnits(totalBalance, 18);
-
-      if (parsedAmountToSend > parsedTotal) {
-        await ctx.reply(
-          `❌ Insufficient balance. You only have ${totalBalance}`,
-        );
-        return;
-      }
-
-      try {
-        const sendingMessage = await ctx.reply('🚀 Generating ZK proof...');
-        sendingMessageId = (sendingMessage as any)?.message_id;
-      } catch (error) {
-        throw new Error(error);
-      }
-
-      const latestNoteIndexSender =
-        await this.commitmentService.getLatestNote(telegramId);
-      const latestNoteIndexRec = await this.commitmentService.getLatestNote(
-        transferPayload.recipientAddress,
-      );
-
-      // Get all commitments that satisfies the transact condition
-      const oldCommitments =
-        await this.commitmentService.getCommitmentsForTransact(
-          telegramId,
-          tokenAddress,
-          parsedAmountToSend,
-        );
-
-      // calculate change amount of old commitments
-      const changeAmount =
-        oldCommitments.reduce(
-          (acc, curr) => acc + parseUnits(curr.amount, 18),
-          0n,
-        ) - parsedAmountToSend;
-
-      // Generate new commitments
-      const newCommitments = await Prove.generateTransactCommitment({
-        amountToSend: parsedAmountToSend,
-        recipient: recipientUser.telegramId,
-        recipientNoteIndex: latestNoteIndexRec + 1,
-        changeAmount,
-        sender: telegramId,
-        senderNoteIndex: latestNoteIndexSender + 1,
-      });
-
-      // Generate ZK proof
-      const zkInput = await Prove.buildZKInput(
-        telegramId,
-        tokenAddress, // private token
         parsedAmountToSend,
-        '0', // tokenOut
+      );
+
+    // calculate change amount of old commitments
+    const changeAmount =
+      oldCommitments.reduce(
+        (acc, curr) => acc + parseUnits(curr.amount, 18),
         0n,
-        recipientUser.telegramId,
-        '0',
-        oldCommitments,
-        newCommitments,
-      );
+      ) - parsedAmountToSend;
 
-      const zkp = await Prove.generateZKProof(zkInput);
+    // Generate new commitments
+    const newCommitments = await Prove.generateTransactCommitment({
+      amountToSend: parsedAmountToSend,
+      recipient: recipientUser.telegramId,
+      recipientNoteIndex: latestNoteIndexRec + 1,
+      changeAmount,
+      sender: telegramId,
+      senderNoteIndex: latestNoteIndexSender + 1,
+    });
 
-      if (chatId && sendingMessageId) {
-        try {
-          await ctx.telegram.deleteMessage(chatId, sendingMessageId);
-        } catch {
-          //
-        }
+    // Generate ZK proof
+    const zkInput = await Prove.buildZKInput(
+      telegramId,
+      tokenAddress, // private token
+      parsedAmountToSend,
+      '0', // tokenOut
+      0n,
+      recipientUser.telegramId,
+      '0',
+      oldCommitments,
+      newCommitments,
+    );
+
+    const zkp = await Prove.generateZKProof(zkInput);
+
+    if (chatId && sendingMessageId) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+      } catch {
+        //
       }
-
-      // Prompt for password confirmation
-      this.pendingOperations.set(telegramId, {
-        type: 'private_transact',
-        sender: telegramId,
-        recipient: recipientUser.telegramId,
-        userId: user._id.toString(),
-        recipientId: recipientUser._id.toString(),
-        sessionToken: session.sessionToken,
-        amount: transferPayload.amount,
-        amountChange: formatUnits(changeAmount, 18),
-        token: tokenAddress,
-        tokenIdentifier: transferPayload.tokenIdentifier, // Store original identifier for display
-        oldCommitments,
-        newCommitments,
-        zkProof: zkp,
-      });
-
-      // Store prompt message ID for auto-delete
-      const promptMessage = await ctx.reply(
-        '🔐 Please confirm by entering your password:',
-      );
-      this.passwordMessageIds.set(telegramId, {
-        promptMessageId: (promptMessage as any).message_id,
-      });
-    } catch (error) {
-      await ctx.reply(`❌ Error: ${error.message}`);
     }
+
+    // Prompt for password confirmation
+    this.pendingOperations.set(telegramId, {
+      type: 'private_transact',
+      sender: telegramId,
+      recipient: recipientUser.telegramId,
+      userId: user._id.toString(),
+      recipientId: recipientUser._id.toString(),
+      sessionToken: session.sessionToken,
+      amount: transferPayload.amount,
+      amountChange: formatUnits(changeAmount, 18),
+      token: tokenAddress,
+      tokenIdentifier: transferPayload.tokenIdentifier, // Store original identifier for display
+      oldCommitments,
+      newCommitments,
+      zkProof: zkp,
+    });
+
+    // Store prompt message ID for auto-delete
+    const promptMessage = await ctx.reply(
+      '🔐 Please confirm by entering your password:',
+    );
+    this.passwordMessageIds.set(telegramId, {
+      promptMessageId: (promptMessage as any).message_id,
+    });
   }
 
   /**
@@ -721,7 +702,6 @@ export class WalletHandler {
         return;
       }
 
-      // Password verified - update status
       if (chatId && verifyingMessageId) {
         try {
           await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
@@ -1347,7 +1327,7 @@ export class WalletHandler {
 
     return (
       `💰 Balance\n\n` +
-      `Address: \`${wallet.address}\`\n` +
+      `Address: \`${wallet.address}\` \n` +
       `${tokenSymbol}: ${balance}`
     );
   }
@@ -1377,7 +1357,7 @@ export class WalletHandler {
 
   async buildHistoryView(
     telegramId: string,
-    limit: number = 10,
+    limit: number = 5,
   ): Promise<string> {
     const user = await this.usersService.getUserByTelegramId(telegramId);
     if (!user) {
@@ -1393,7 +1373,7 @@ export class WalletHandler {
       return '📝 No transactions found.';
     }
 
-    let message = '📝 Transaction History\n\n';
+    let message = '📝 Transaction History (10 latest) \n\n';
     transactions.forEach((tx, index) => {
       message += `${index + 1}. ${tx.type.toUpperCase()}\n`;
       message += `   Hash: \`${tx.txHash}\`\n`;

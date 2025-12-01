@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectBot, Command, Update, On, Action, Ctx } from 'nestjs-telegraf';
@@ -725,7 +726,6 @@ export class TelegramService implements OnModuleInit {
         await ctx.reply('❌ Invalid amount. Please enter a positive number.');
         return true;
       }
-
       const args = [
         text.trim(),
         wizard.mode,
@@ -742,10 +742,32 @@ export class TelegramService implements OnModuleInit {
         return true;
       }
 
-      if (wizard.mode === 'public') {
-        await this.walletHandler.handleSend(ctx, args);
-      } else {
-        await this.walletHandler.handlePrivateTransfer(ctx, args);
+      const actionName =
+        wizard.mode === 'public'
+          ? 'transfer:public_wizard'
+          : 'transfer:private_wizard';
+
+      try {
+        if (wizard.mode === 'public') {
+          await this.walletHandler.handleSend(ctx, args);
+        } else {
+          await this.walletHandler.handlePrivateTransfer(ctx, args);
+        }
+      } catch (error) {
+        const actionToContinue = this.buildInlineActionWithPayload(actionName, {
+          amount: args[0],
+          mode: wizard.mode,
+          token: wizard.tokenIdentifier ?? '',
+          recipient: wizard.recipient ?? '',
+        });
+
+        if (await this.handleLockedWalletError(ctx, error, actionToContinue)) {
+          return true;
+        }
+
+        await this.renderWalletDialog(ctx, this.formatInlineError(error), [
+          [Markup.button.callback('⬅️ Back', 'view:wallets')],
+        ]);
       }
       return true;
     }
@@ -787,7 +809,7 @@ export class TelegramService implements OnModuleInit {
     const copy = sections.filter(Boolean).join('\n\n');
     const keyboardMarkup = Markup.inlineKeyboard(buttons);
     const responseOptions = {
-      // parse_mode: 'Markdown' as const, // ERROR here
+      parse_mode: 'Markdown' as const, //!TODO Monitor
       reply_markup: keyboardMarkup.reply_markup,
     };
 
@@ -896,9 +918,11 @@ export class TelegramService implements OnModuleInit {
     const telegramId = ctx.from?.id.toString();
     if (!telegramId) return;
 
+    const { action: actionName, payload } = this.parseCallbackData(action);
+
     try {
       //  handle router
-      switch (action) {
+      switch (actionName) {
         case 'balance:public': {
           const message =
             await this.walletHandler.buildPublicBalanceView(telegramId);
@@ -927,6 +951,30 @@ export class TelegramService implements OnModuleInit {
           ]);
           break;
         }
+        case 'transfer:public_wizard': {
+          const amount = payload.amount;
+          const token = payload.token;
+          const recipient = payload.recipient;
+          if (!amount || !token || !recipient) {
+            await this.renderWalletCenter(ctx);
+            break;
+          }
+          const args = [amount, 'public', token, recipient];
+          await this.walletHandler.handleSend(ctx, args);
+          break;
+        }
+        case 'transfer:private_wizard': {
+          const amount = payload.amount;
+          const token = payload.token;
+          const recipient = payload.recipient;
+          if (!amount || !token || !recipient) {
+            await this.renderWalletCenter(ctx);
+            break;
+          }
+          const args = [amount, 'private', token, recipient];
+          await this.walletHandler.handlePrivateTransfer(ctx, args);
+          break;
+        }
         default:
           // If action is not recognized, just show wallet center
           await this.renderWalletCenter(ctx);
@@ -952,6 +1000,24 @@ export class TelegramService implements OnModuleInit {
     }
 
     return { action, payload };
+  }
+
+  /**
+   * Build an action string with serialized payload (similar to callback_data)
+   */
+  private buildInlineActionWithPayload(
+    action: string,
+    payload: Record<string, string>,
+  ): string {
+    const serialized = Object.entries(payload)
+      .filter(([_, value]) => Boolean(value))
+      .map(
+        ([key, value]) =>
+          `${key}=${encodeURIComponent(value.toString().slice(0, 32))}`,
+      )
+      .join('&');
+
+    return serialized ? `${action}|${serialized}` : action;
   }
 
   @Command('createwallet')
@@ -985,7 +1051,11 @@ export class TelegramService implements OnModuleInit {
   async onSend(ctx: Context) {
     const text = (ctx.message as any)?.text || '';
     const args = text.split(' ').slice(1);
-    await this.walletHandler.handleSend(ctx, args);
+    try {
+      await this.walletHandler.handleSend(ctx, args);
+    } catch (error) {
+      await ctx.reply(this.formatInlineError(error));
+    }
   }
 
   @Command('history')
@@ -996,13 +1066,21 @@ export class TelegramService implements OnModuleInit {
   @Command('transfer')
   async onTransfer(ctx: Context) {
     const args = this.getCommandArguments(ctx);
-    await this.walletHandler.handlePublicTransfer(ctx, args);
+    try {
+      await this.walletHandler.handlePublicTransfer(ctx, args);
+    } catch (error) {
+      await ctx.reply(this.formatInlineError(error));
+    }
   }
 
   @Command('privatetransfer')
   async onPrivateTransfer(ctx: Context) {
     const args = this.getCommandArguments(ctx);
-    await this.walletHandler.handlePrivateTransfer(ctx, args);
+    try {
+      await this.walletHandler.handlePrivateTransfer(ctx, args);
+    } catch (error) {
+      await ctx.reply(this.formatInlineError(error));
+    }
   }
 
   @Command('shield')
