@@ -403,7 +403,7 @@ export class TransactionService {
   }
 
   /**
-   * Update transaction status
+   * Update transaction status //!TODO Use for build cronjob the next build
    */
   async updateTransactionStatus(
     txHash: string,

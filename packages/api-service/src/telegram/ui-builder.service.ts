@@ -58,6 +58,7 @@ export class UIBuilderService {
         { text: '🌉 Shield Token', action: 'wallet:shield' },
         { text: '🔭 Unshield Token', action: 'wallet:unshield' },
       ],
+      [{ text: '🔑 Export Private Key', action: 'wallet:export_key' }],
       [{ text: '🔄 Refresh', action: 'wallet:refresh' }],
       [{ text: '🔙 Back to Home', action: 'view:dashboard' }],
     ],

@@ -97,7 +97,6 @@ export class TelegramService implements OnModuleInit {
       '📖 Available Commands:\n\n' +
       '/start - Start the bot\n' +
       '/createwallet - Create a new wallet\n' +
-      '/checkfunding - Check if wallet is funded\n' +
       '/deploywallet - Deploy your wallet after funding\n' +
       '/login - Unlock your wallet with password\n' +
       '/balance - Check your wallet balance\n' +
@@ -200,6 +199,36 @@ export class TelegramService implements OnModuleInit {
         [Markup.button.callback('⬅️ Back', 'view:wallets')],
       ]);
       await ctx.answerCbQuery('Failed to load history', { show_alert: true });
+    }
+  }
+
+  @Action('wallet:export_key')
+  async handleExportPrivateKeyAction(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    try {
+      const { walletAddress, privateKey } =
+        await this.walletHandler.exportPrivateKey(telegramId);
+      const messageId = await this.renderPrivateKeyExport(
+        ctx,
+        walletAddress,
+        privateKey,
+      );
+      const chatId = (ctx.chat as any)?.id;
+      this.schedulePrivateKeyDeletion(chatId, messageId);
+      await ctx.answerCbQuery('Private key shown');
+    } catch (error) {
+      if (await this.handleLockedWalletError(ctx, error, 'wallet:export_key')) {
+        return;
+      }
+      await this.renderWalletDialog(ctx, this.formatInlineError(error), [
+        [Markup.button.callback('⬅️ Back', 'view:wallets')],
+      ]);
+      await ctx.answerCbQuery('Failed to export key', { show_alert: true });
     }
   }
 
@@ -501,7 +530,7 @@ export class TelegramService implements OnModuleInit {
 
   private buildDashboardCopy(walletAddress?: string): string {
     const walletLine = walletAddress
-      ? `Starknet: \`${walletAddress}\` (tab to copy)`
+      ? `Starknet: \`${walletAddress}\` `
       : 'Starknet: _Connect your wallet via /createwallet_';
 
     return [walletLine, '', 'Tap a section below to continue.'].join('\n');
@@ -517,6 +546,47 @@ export class TelegramService implements OnModuleInit {
     }
 
     return lines.join('\n');
+  }
+
+  private async renderPrivateKeyExport(
+    ctx: Context,
+    walletAddress: string,
+    privateKey: string,
+  ): Promise<number | undefined> {
+    const body =
+      '🔑 *Private Key Export*\n\n' +
+      `Wallet: \`${walletAddress}\`\n` +
+      `Private Key: \`${privateKey}\`\n\n` +
+      '_This message auto-deletes in 10 seconds._\n\n' +
+      '⚠️ Anyone with this key can control your funds. Store it securely.';
+
+    return this.renderWalletDialog(ctx, body, [
+      [Markup.button.callback('⬅️ Back', 'view:wallets')],
+    ]);
+  }
+
+  private schedulePrivateKeyDeletion(
+    chatId?: number,
+    messageId?: number,
+    delayMs = 10000,
+  ): void {
+    if (!chatId || !messageId) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        await this.bot.telegram.deleteMessage(chatId, messageId);
+      } catch (error) {
+        console.warn(
+          `Failed to auto-delete private key message ${messageId}: ${
+            (error as Error).message
+          }`,
+        );
+      }
+    }, delayMs);
+
+    if (typeof (timer as any).unref === 'function') {
+      (timer as any).unref();
+    }
   }
 
   private getCommandArguments(ctx: Context): string[] {
@@ -877,8 +947,10 @@ export class TelegramService implements OnModuleInit {
       messageIds.promptMessageId = promptMessage;
       this.walletHandler.setPasswordMessageIds(telegramId, messageIds);
     }
-
-    await ctx.answerCbQuery('Wallet locked - enter password');
+    // Only answer callback queries when this handler is invoked from a button.
+    if (ctx.callbackQuery && typeof ctx.answerCbQuery === 'function') {
+      await ctx.answerCbQuery('Wallet locked - enter password');
+    }
     return true;
   }
 
@@ -949,6 +1021,18 @@ export class TelegramService implements OnModuleInit {
             [Markup.button.callback('🔁 Refresh', 'wallet:history')],
             [Markup.button.callback('⬅️ Back', 'view:wallets')],
           ]);
+          break;
+        }
+        case 'wallet:export_key': {
+          const { walletAddress, privateKey } =
+            await this.walletHandler.exportPrivateKey(telegramId);
+          const messageId = await this.renderPrivateKeyExport(
+            ctx,
+            walletAddress,
+            privateKey,
+          );
+          const chatId = (ctx.chat as any)?.id;
+          this.schedulePrivateKeyDeletion(chatId, messageId);
           break;
         }
         case 'transfer:public_wizard': {

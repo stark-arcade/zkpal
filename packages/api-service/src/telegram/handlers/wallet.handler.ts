@@ -55,7 +55,6 @@ export class WalletHandler {
     }
 
     try {
-      // Get or create user
       const user = await this.usersService.createOrGetUser(
         telegramId,
         ctx.from.username,
@@ -115,7 +114,6 @@ export class WalletHandler {
     const pending = this.pendingOperations.get(telegramId);
     if (!pending || pending.type !== 'create_wallet') return;
 
-    // Store user's password message ID for deletion
     const userMessageId = (ctx.message as any)?.message_id;
     const messageIds = this.passwordMessageIds.get(telegramId) || {};
     messageIds.userMessageId = userMessageId;
@@ -124,7 +122,6 @@ export class WalletHandler {
     try {
       // Validate password
       if (!this.validatePassword(password)) {
-        // Delete password messages
         await this.deletePasswordMessages(ctx, telegramId);
 
         await ctx.reply(
@@ -152,7 +149,6 @@ export class WalletHandler {
       // Update user
       await this.usersService.updateWalletStatus(pending.userId, true);
 
-      // Delete password messages
       await this.deletePasswordMessages(ctx, telegramId);
 
       // Clear pending operation
@@ -163,7 +159,6 @@ export class WalletHandler {
         parse_mode: 'Markdown',
       });
 
-      // Render the deployment flow (which shows the address and next steps)
       await this.telegramService.renderWalletDeploymentFlow(ctx, wallet);
     } catch (error) {
       await this.deletePasswordMessages(ctx, telegramId);
@@ -199,7 +194,6 @@ export class WalletHandler {
         return;
       }
 
-      // Get or create session
       let session =
         await this.sessionService.getSessionByTelegramId(telegramId);
       if (!session) {
@@ -368,7 +362,6 @@ export class WalletHandler {
       // Delete password messages
       await this.deletePasswordMessages(ctx, telegramId);
 
-      // Clear pending operation
       this.pendingOperations.delete(telegramId);
 
       // Return action to continue (caller will handle it)
@@ -475,7 +468,7 @@ export class WalletHandler {
       sessionToken: session.sessionToken,
       amount: transferPayload.amount,
       tokenAddress,
-      tokenIdentifier: transferPayload.tokenIdentifier, // Store original identifier for display
+      tokenIdentifier: transferPayload.tokenIdentifier,
       recipientAddress: transferPayload.recipientAddress,
     });
 
@@ -639,7 +632,7 @@ export class WalletHandler {
       amount: transferPayload.amount,
       amountChange: formatUnits(changeAmount, 18),
       token: tokenAddress,
-      tokenIdentifier: transferPayload.tokenIdentifier, // Store original identifier for display
+      tokenIdentifier: transferPayload.tokenIdentifier,
       oldCommitments,
       newCommitments,
       zkProof: zkp,
@@ -688,7 +681,6 @@ export class WalletHandler {
       );
 
       if (!isValid) {
-        // Delete password messages
         await this.deletePasswordMessages(ctx, telegramId);
         if (chatId && verifyingMessageId) {
           try {
@@ -1373,7 +1365,7 @@ export class WalletHandler {
       return '📝 No transactions found.';
     }
 
-    let message = '📝 Transaction History (10 latest) \n\n';
+    let message = '📝 Transaction History (5 latest) \n\n';
     transactions.forEach((tx, index) => {
       message += `${index + 1}. ${tx.type.toUpperCase()}\n`;
       message += `   Hash: \`${tx.txHash}\`\n`;
@@ -1402,6 +1394,20 @@ export class WalletHandler {
     }
 
     return { wallet, session };
+  }
+
+  async exportPrivateKey(telegramId: string) {
+    const { wallet, session } =
+      await this.resolveUnlockedWalletContext(telegramId);
+
+    const privateKey = await this.sessionService.getDecryptedPrivateKey(
+      session.sessionToken,
+    );
+
+    return {
+      walletAddress: wallet.address,
+      privateKey,
+    };
   }
 
   private async resolveWalletContext(telegramId: string) {
@@ -1512,7 +1518,7 @@ export class WalletHandler {
   }
 
   /**
-   * Unshield Token Contract From telegram Command (mocked)
+   * Unshield Token Contract
    */
   async handleUnshieldToken(ctx: Context, args: string[]): Promise<void> {
     const telegramId = ctx.from?.id.toString();
@@ -1647,7 +1653,7 @@ export class WalletHandler {
         amount: payload.amount,
         amountChange: formatUnits(changeAmount, 18),
         token: tokenAddress,
-        tokenIdentifier: payload.tokenIdentifier, // Store original identifier for display
+        tokenIdentifier: payload.tokenIdentifier,
         oldCommitments,
         newCommitments,
         zkProof: zkp,
@@ -1906,7 +1912,6 @@ export class WalletHandler {
       );
       await this.telegramService.renderWalletCenter(ctx);
     } catch (error) {
-      // Delete password messages on error
       await this.deletePasswordMessages(ctx, telegramId);
       this.pendingOperations.delete(telegramId);
       await ctx.reply(`❌ Transaction failed: ${error.message}`);
