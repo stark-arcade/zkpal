@@ -878,7 +878,7 @@ export class WalletHandler {
         '🤫 *Private Transfer*\n\n' +
           `Tx Hash: \`${transaction.txHash}\`\n` +
           `Amount: ${pending.amount} ${tokenSymbol}\n` +
-          `Recipient: @${receiptUser.telegramUsername}\n` +
+          `Recipient: @${receiptUser.telegramUsername.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}\n` +
           `Token: \`${tokenSymbol}\`\n` +
           '_Your token is secretly sent to the recipient._',
         { parse_mode: 'Markdown' },
