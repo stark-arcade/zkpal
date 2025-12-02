@@ -40,10 +40,7 @@ export class UIBuilderService {
     dashboard: [
       [{ text: '👛 Wallets', action: 'view:wallets' }],
 
-      [
-        { text: '🔄 Logout', action: 'logout' },
-        { text: '🔄 Refresh', action: 'refresh:dashboard' },
-      ],
+      [{ text: '🔄 Refresh', action: 'refresh:dashboard' }],
     ],
     'wallets:home': [
       [

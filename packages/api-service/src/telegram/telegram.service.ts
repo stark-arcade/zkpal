@@ -38,15 +38,11 @@ export class TelegramService implements OnModuleInit {
 
   async onModuleInit() {
     await this.bot.telegram.setMyCommands([
-      { command: 'start', description: 'Start the bot' },
+      { command: 'start', description: 'Start the zkpal' },
       { command: 'createwallet', description: 'Create a new wallet' },
-      { command: 'checkfunding', description: 'Check wallet funding status' },
       { command: 'deploywallet', description: 'Deploy your wallet' },
       { command: 'login', description: 'Unlock your wallet' },
-      {
-        command: 'balance',
-        description: 'Check wallet balance (public/private)',
-      },
+
       { command: 'send', description: 'Send tokens' },
       { command: 'transfer', description: 'Public token transfer' },
       {
@@ -77,7 +73,7 @@ export class TelegramService implements OnModuleInit {
         ctx.from?.last_name,
       );
 
-      await ctx.reply('👋 *Welcome to Zkpal Bot V1.0*\n\n', {
+      await ctx.reply('👋 *Welcome to Zkpal V1.0*\n\n', {
         parse_mode: 'Markdown',
       });
       await this.renderDashboard(ctx);
@@ -432,7 +428,7 @@ export class TelegramService implements OnModuleInit {
 
   private async renderWalletCreationFlow(ctx: Context) {
     const copy =
-      'Create your secure wallet to begin using Zkpal Bot.\n\n' +
+      'Create your secure wallet to begin using Zkpal .\n\n' +
       '🔒 Your wallet will be secured with a password.\n' +
       '⚠️ *Important:* Keep your password safe and never share it! \n\n';
 
@@ -1174,10 +1170,10 @@ export class TelegramService implements OnModuleInit {
     await this.walletHandler.handleUnshieldToken(ctx, args);
   }
 
-  @Command('logout')
-  async onLogout(ctx: Context) {
-    await this.walletHandler.handleLogout(ctx);
-  }
+  // @Command('logout')
+  // async onLogout(ctx: Context) {
+  //   await this.walletHandler.handleLogout(ctx);
+  // }
 
   @Command('deploywallet')
   async onDeployWallet(ctx: Context) {
