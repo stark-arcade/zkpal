@@ -105,6 +105,94 @@ export class WalletHandler {
   }
 
   /**
+   * Start wallet rotation flow (create new wallet while deactivating old)
+   */
+  async startRotateWalletFlow(ctx: Context): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.reply('Unable to identify user.');
+      return;
+    }
+
+    const user = await this.usersService.getUserByTelegramId(telegramId);
+    if (!user || !user.isWalletCreated) {
+      await ctx.reply(
+        '❌ Wallet not found. Please create a wallet first with /createwallet',
+      );
+      return;
+    }
+
+    const wallet = await this.walletService.getWalletByUserId(
+      user._id.toString(),
+    );
+    if (!wallet) {
+      await ctx.reply('❌ No active wallet found to replace.');
+      return;
+    }
+
+    this.pendingOperations.set(telegramId, {
+      type: 'rotate_wallet',
+      userId: user._id.toString(),
+    });
+
+    const promptMessage = await ctx.reply(
+      '🆕 Enter a new password for your replacement wallet.\n\n' +
+        `Old wallet will be deactivated once the new one is created.\n\n` +
+        `Requirements:\n` +
+        `• Minimum ${PASSWORD_CONFIG.MIN_LENGTH} characters\n` +
+        `• At least one uppercase letter\n` +
+        `• At least one lowercase letter\n` +
+        `• At least one number`,
+    );
+
+    this.passwordMessageIds.set(telegramId, {
+      promptMessageId: (promptMessage as any).message_id,
+    });
+  }
+
+  /**
+   * Start password reset via private key flow
+   */
+  async startResetPasswordWallet(ctx: Context): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.reply('Unable to identify user.');
+      return;
+    }
+
+    const user = await this.usersService.getUserByTelegramId(telegramId);
+    if (!user || !user.isWalletCreated) {
+      await ctx.reply(
+        '❌ Wallet not found. Please create a wallet first with /createwallet',
+      );
+      return;
+    }
+
+    const wallet = await this.walletService.getWalletByUserId(
+      user._id.toString(),
+    );
+    if (!wallet) {
+      await ctx.reply('❌ No active wallet link this telegram to recover.');
+      return;
+    }
+
+    this.pendingOperations.set(telegramId, {
+      type: 'reset_wallet_password',
+      userId: user._id.toString(),
+      step: 'private_key',
+    });
+
+    const promptMessage = await ctx.reply(
+      '🔑 Please paste the private key of your active wallet (starts with 0x). ' +
+        'We will verify it so you can set a new password.',
+    );
+
+    this.passwordMessageIds.set(telegramId, {
+      promptMessageId: (promptMessage as any).message_id,
+    });
+  }
+
+  /**
    * Handle password input for wallet creation
    */
   async handlePasswordInput(ctx: Context, password: string): Promise<void> {
@@ -164,6 +252,155 @@ export class WalletHandler {
       await this.deletePasswordMessages(ctx, telegramId);
       this.pendingOperations.delete(telegramId);
       await ctx.reply(`❌ Failed to create wallet: ${error.message}`);
+    }
+  }
+
+  /**
+   * Handle new password for wallet rotation
+   */
+  async handleRotateWalletPassword(
+    ctx: Context,
+    password: string,
+  ): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const pending = this.pendingOperations.get(telegramId);
+    if (!pending || pending.type !== 'rotate_wallet') return;
+
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
+    if (!this.validatePassword(password)) {
+      await this.deletePasswordMessages(ctx, telegramId);
+      const retryPrompt = await ctx.reply(
+        '❌ Password does not meet requirements. Please try again:\n\n' +
+          `• Minimum ${PASSWORD_CONFIG.MIN_LENGTH} characters\n` +
+          `• At least one uppercase letter\n` +
+          `• At least one lowercase letter\n` +
+          `• At least one number`,
+      );
+      this.passwordMessageIds.set(telegramId, {
+        promptMessageId: (retryPrompt as any).message_id,
+      });
+      return;
+    }
+
+    try {
+      const { wallet } = await this.walletService.createWalletAddress(
+        pending.userId,
+        password,
+        { allowReplace: true },
+      );
+
+      await this.sessionService.updatePasswordHashForUser(
+        pending.userId,
+        wallet.passwordHash,
+      );
+
+      await this.usersService.updateWalletStatus(pending.userId, true);
+      await this.deletePasswordMessages(ctx, telegramId);
+      this.pendingOperations.delete(telegramId);
+
+      await ctx.reply(
+        '✅ New wallet created. Your previous wallet has been deactivated.',
+      );
+      await this.telegramService.renderWalletDeploymentFlow(ctx, wallet);
+    } catch (error) {
+      await this.deletePasswordMessages(ctx, telegramId);
+      this.pendingOperations.delete(telegramId);
+      await ctx.reply(`❌ Failed to create new wallet: ${error.message}`);
+    }
+  }
+
+  /**
+   * Handle import/reset wallet flow input -> this reset password wallet
+   */
+  async handleResetPasswordWallet(ctx: Context, input: string): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const pending = this.pendingOperations.get(telegramId);
+    if (!pending || pending.type !== 'reset_wallet_password') return;
+
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
+    const step = pending.step;
+    if (step === 'private_key') {
+      try {
+        const verification = await this.walletService.verifyPrivateKeyOwnership(
+          pending.userId,
+          input.trim(),
+        );
+
+        await this.deletePasswordMessages(ctx, telegramId);
+
+        this.pendingOperations.set(telegramId, {
+          ...pending,
+          step: 'new_password',
+          normalizedPrivateKey: verification.normalizedPrivateKey,
+        });
+
+        const promptMessage = await ctx.reply(
+          '✅ Private key verified.\n\n' +
+            'Please enter a new password for your wallet:',
+        );
+        this.passwordMessageIds.set(telegramId, {
+          promptMessageId: (promptMessage as any).message_id,
+        });
+      } catch (error) {
+        await this.deletePasswordMessages(ctx, telegramId);
+        this.pendingOperations.delete(telegramId);
+        await ctx.reply(`❌ ${error.message}`);
+      }
+      return;
+    }
+
+    if (step === 'new_password') {
+      if (!this.validatePassword(input)) {
+        await this.deletePasswordMessages(ctx, telegramId);
+        const retryPrompt = await ctx.reply(
+          '❌ Password does not meet requirements. Please try again:\n\n' +
+            `• Minimum ${PASSWORD_CONFIG.MIN_LENGTH} characters\n` +
+            `• At least one uppercase letter\n` +
+            `• At least one lowercase letter\n` +
+            `• At least one number`,
+        );
+        this.passwordMessageIds.set(telegramId, {
+          promptMessageId: (retryPrompt as any).message_id,
+        });
+        return;
+      }
+
+      try {
+        const updatedWallet =
+          await this.walletService.resetWalletPasswordWithPrivateKey(
+            pending.userId,
+            pending.normalizedPrivateKey,
+            input,
+          );
+
+        await this.sessionService.updatePasswordHashForUser(
+          pending.userId,
+          updatedWallet.passwordHash,
+        );
+
+        await this.deletePasswordMessages(ctx, telegramId);
+        this.pendingOperations.delete(telegramId);
+
+        await ctx.reply(
+          '✅ Password updated. Use /login to unlock your wallet with the new password.',
+        );
+      } catch (error) {
+        await this.deletePasswordMessages(ctx, telegramId);
+        this.pendingOperations.delete(telegramId);
+        await ctx.reply(`❌ Failed to reset password: ${error.message}`);
+      }
     }
   }
 
@@ -1310,7 +1547,18 @@ export class WalletHandler {
     telegramId: string,
     tokenAddress?: string,
   ): Promise<string> {
-    const { wallet } = await this.resolveUnlockedWalletContext(telegramId);
+    const user = await this.usersService.getUserByTelegramId(telegramId);
+    if (!user || !user.isWalletCreated) {
+      return;
+    }
+
+    const wallet = await this.walletService.getWalletByUserId(
+      user._id.toString(),
+    );
+    if (!wallet) {
+      await '❌ Wallet not found.';
+      return;
+    }
     const balance = await this.walletService.getBalance(
       wallet.address,
       tokenAddress,
@@ -1340,7 +1588,15 @@ export class WalletHandler {
     const balances =
       await this.commitmentService.getPrivateBalanceList(telegramId);
 
-    let message = `🛡️ Private Balances\n\nOwner: ${ownerLabel}\n\n💰 Balances:`;
+    let message = `🛡️ Private Balances\n\nOwner: ${ownerLabel}\n\n`;
+    if (balances.length === 0) {
+      message += `❌ No private balances found. Let shield your token`;
+    } else {
+      message += `💰 Balances:\n`;
+      for (const { token, amount } of balances) {
+        message += `• ${token}: ${amount}\n`;
+      }
+    }
     for (const balance of balances) {
       message += `\n- ${balance.token}: ${balance.amount}`;
     }

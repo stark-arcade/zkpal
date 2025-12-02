@@ -78,7 +78,7 @@ export class TelegramService implements OnModuleInit {
       });
       await this.renderDashboard(ctx);
     } catch (error) {
-      await ctx.reply(`❌ Error: ${error.message}`);
+      await ctx.reply(`${error.message}`);
     }
   }
 
@@ -95,7 +95,6 @@ export class TelegramService implements OnModuleInit {
       '/createwallet - Create a new wallet\n' +
       '/deploywallet - Deploy your wallet after funding\n' +
       '/login - Unlock your wallet with password\n' +
-      '/balance - Check your wallet balance\n' +
       '/send - Send tokens to another address\n' +
       '/history - View your transaction history\n' +
       '/logout - Lock your wallet\n' +
@@ -166,12 +165,6 @@ export class TelegramService implements OnModuleInit {
     await this.renderWalletCenter(ctx);
   }
 
-  // @Action('wallet:balance')
-  // async handleWalletBalanceAction(@Ctx() ctx: Context) {
-  //   // await this.renderBalancePicker(ctx, true);
-  //   await ctx.answerCbQuery('Select balance type');
-  // }
-
   @Action('wallet:history')
   async handleWalletHistoryAction(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
@@ -238,6 +231,12 @@ export class TelegramService implements OnModuleInit {
     await this.startTransferWizard(ctx, 'private');
   }
 
+  @Action('wallet:create_new')
+  async handleCreateNewWalletAction(@Ctx() ctx: Context) {
+    await this.walletHandler.startRotateWalletFlow(ctx);
+    await ctx.answerCbQuery('Creating new wallet...');
+  }
+
   @Action('wallet:shield')
   async handleShieldAction(@Ctx() ctx: Context) {
     await this.renderWalletDialog(ctx, this.buildTokenAmountHint('shield'), [
@@ -254,6 +253,11 @@ export class TelegramService implements OnModuleInit {
     await ctx.answerCbQuery('Use /unshield');
   }
 
+  @Action('wallet:reset_wallet_password')
+  async handleResetWalletAction(@Ctx() ctx: Context) {
+    await this.walletHandler.startResetPasswordWallet(ctx);
+    await ctx.answerCbQuery('Reseting wallet Password...');
+  }
   @Action(/transfer:token/)
   async handleTransferTokenSelection(@Ctx() ctx: Context) {
     const telegramId = ctx.from?.id.toString();
@@ -391,10 +395,9 @@ export class TelegramService implements OnModuleInit {
       return;
     }
 
-    // Wallet exists and is deployed, show normal dashboard
-    const walletAddress = await this.getPrimaryWalletAddress(telegramId);
-    const copy = this.buildDashboardCopy(walletAddress);
-    await this.renderScreen(ctx, copy, 'dashboard');
+    const balance = await this.walletHandler.buildPublicBalanceView(telegramId);
+
+    await this.renderScreen(ctx, balance, 'dashboard');
   }
 
   async renderWalletCenter(ctx: Context) {
@@ -420,10 +423,9 @@ export class TelegramService implements OnModuleInit {
     }
 
     // Wallet exists and is deployed, show wallet center
-    const { walletSlots, walletAddress } =
-      await this.resolveWalletContext(telegramId);
-    const copy = this.buildWalletCopy(walletAddress);
-    await this.renderScreen(ctx, copy, 'wallets:home', { walletSlots });
+    const { walletSlots } = await this.resolveWalletContext(telegramId);
+    const balance = await this.walletHandler.buildPublicBalanceView(telegramId);
+    await this.renderScreen(ctx, balance, 'wallets:home', { walletSlots });
   }
 
   private async renderWalletCreationFlow(ctx: Context) {
@@ -433,7 +435,13 @@ export class TelegramService implements OnModuleInit {
       '⚠️ *Important:* Keep your password safe and never share it! \n\n';
 
     const buttons: InlineKeyboardButton[][] = [
-      [Markup.button.callback('✨ Create Wallet', 'onboarding:create_wallet')],
+      [
+        Markup.button.callback(
+          '✨ Create New Wallet',
+          'onboarding:create_wallet',
+        ),
+      ],
+
       [Markup.button.callback('🔄 Refresh', 'refresh:dashboard')],
     ];
 
@@ -456,10 +464,7 @@ export class TelegramService implements OnModuleInit {
       '💡 Minimum required: ~0.01 STRK (for deployment fees)';
 
     const buttons: InlineKeyboardButton[][] = [
-      [
-        Markup.button.callback('💰 Check Balance', 'onboarding:check_balance'),
-        Markup.button.callback('🚀 Deploy Wallet', 'onboarding:deploy_wallet'),
-      ],
+      [Markup.button.callback('🚀 Deploy Wallet', 'onboarding:deploy_wallet')],
       [Markup.button.callback('🔄 Refresh', 'refresh:dashboard')],
     ];
 
@@ -519,31 +524,6 @@ export class TelegramService implements OnModuleInit {
     return { walletSlots: slots, walletAddress: wallet.address };
   }
 
-  private async getPrimaryWalletAddress(telegramId?: string) {
-    const context = await this.resolveWalletContext(telegramId);
-    return context.walletAddress;
-  }
-
-  private buildDashboardCopy(walletAddress?: string): string {
-    const walletLine = walletAddress
-      ? `Starknet: \`${walletAddress}\` `
-      : 'Starknet: _Connect your wallet via /createwallet_';
-
-    return [walletLine, '', 'Tap a section below to continue.'].join('\n');
-  }
-
-  private buildWalletCopy(walletAddress?: string): string {
-    const lines = [''];
-
-    if (walletAddress) {
-      lines.push(`Active Wallet: \`${walletAddress}\``);
-    } else {
-      lines.push('No wallet connected yet.');
-    }
-
-    return lines.join('\n');
-  }
-
   private async renderPrivateKeyExport(
     ctx: Context,
     walletAddress: string,
@@ -593,23 +573,6 @@ export class TelegramService implements OnModuleInit {
       .map((chunk) => chunk.trim())
       .filter((chunk) => chunk.length > 0);
   }
-
-  // private async renderBalancePicker(ctx: Context, includeBackButton: boolean) {
-  //   // const rows: InlineKeyboardButton[][] = [
-  //   //   [Markup.button.callback('🌐 Public balance', 'balance:public')],
-  //   //   [Markup.button.callback('🛡️ Private balance', 'balance:private')],
-  //   // ];
-
-  //   if (includeBackButton) {
-  //     rows.push([Markup.button.callback('⬅️ Back', 'view:wallets')]);
-  //   }
-
-  //   await this.renderWalletDialog(
-  //     ctx,
-  //     'Choose which balance you want to check:',
-  //     rows,
-  //   );
-  // }
 
   private async startTransferWizard(ctx: Context, mode: TransferMode) {
     const telegramId = ctx.from?.id.toString();
@@ -862,8 +825,9 @@ export class TelegramService implements OnModuleInit {
     buttons: InlineKeyboardButton[][],
   ): Promise<number | undefined> {
     const telegramId = ctx.from?.id.toString();
-    const { walletAddress } = await this.resolveWalletContext(telegramId);
-    const sections = [this.buildWalletCopy(walletAddress)];
+
+    const balance = await this.walletHandler.buildPublicBalanceView(telegramId);
+    const sections = [balance];
 
     if (body) {
       sections.push(body);
@@ -1219,6 +1183,9 @@ export class TelegramService implements OnModuleInit {
       case 'unlock_wallet':
         await this.walletHandler.handleUnlockPassword(ctx, text);
         break;
+      case 'rotate_wallet':
+        await this.walletHandler.handleRotateWalletPassword(ctx, text);
+        break;
       case 'unlock_wallet_inline':
         await this.handleInlineUnlockAndContinue(ctx, text);
         break;
@@ -1236,6 +1203,9 @@ export class TelegramService implements OnModuleInit {
         break;
       case 'unshield_token':
         await this.walletHandler.handleUnshieldTokenConfirmation(ctx, text);
+        break;
+      case 'reset_wallet_password':
+        await this.walletHandler.handleResetPasswordWallet(ctx, text);
         break;
       default:
         await ctx.reply('Unknown operation. Please try again.');

@@ -224,6 +224,33 @@ export class SessionService {
   }
 
   /**
+   * Refresh password hash for all sessions owned by a user
+   */
+  async updatePasswordHashForUser(
+    userId: string,
+    passwordHash: string,
+  ): Promise<void> {
+    await this.sessionModel
+      .updateMany(
+        { userId },
+        {
+          $set: {
+            passwordHash,
+            isVerified: false,
+            failedAttempts: 0,
+            lastActivityAt: new Date(),
+          },
+          $unset: {
+            decryptedPrivateKey: '',
+            keyUnlockedAt: '',
+            keyExpiresAt: '',
+          },
+        },
+      )
+      .exec();
+  }
+
+  /**
    * Invalidate entire session
    */
   async invalidateSession(sessionToken: string): Promise<void> {

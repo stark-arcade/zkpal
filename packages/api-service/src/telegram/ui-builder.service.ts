@@ -39,12 +39,12 @@ export class UIBuilderService {
   private readonly screens: Record<UIScreenId, ScreenStructure> = {
     dashboard: [
       [{ text: '👛 Wallets', action: 'view:wallets' }],
-
+      [{ text: '🆕 Create New Wallet', action: 'wallet:create_new' }],
       [{ text: '🔄 Refresh', action: 'refresh:dashboard' }],
     ],
     'wallets:home': [
       [
-        { text: '💰 Balance Native', action: 'balance:public' },
+        // { text: '💰 Balance Native', action: 'balance:public' },
         { text: '💰 Balance Private', action: 'balance:private' },
         { text: '🪙 Tx History', action: 'wallet:history' },
       ],
@@ -56,8 +56,15 @@ export class UIBuilderService {
         { text: '🌉 Shield Token', action: 'wallet:shield' },
         { text: '🔭 Unshield Token', action: 'wallet:unshield' },
       ],
-      [{ text: '🔑 Export Private Key', action: 'wallet:export_key' }],
-      // [{ text: '🔄 Refresh', action: 'wallet:refresh' }],
+      [
+        { text: '🔑 Export Private Key', action: 'wallet:export_key' },
+        {
+          text: 'Reset Your Password',
+          action: 'wallet:reset_wallet_password',
+        },
+      ],
+
+      [{ text: '🔄 Refresh', action: 'wallet:refresh' }],
       [{ text: '🔙 Back to Home', action: 'view:dashboard' }],
     ],
   };

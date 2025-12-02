@@ -25,11 +25,21 @@ export class WalletService {
   async createWalletAddress(
     userId: string,
     password: string,
+    options: { allowReplace?: boolean } = {},
   ): Promise<{ wallet: WalletDocument; address: string; privateKey: string }> {
-    // Check if wallet already exists
-    const existingWallet = await this.walletModel.findOne({ userId }).exec();
+    let deactivatedWallet: WalletDocument | null = null;
+    const existingWallet = await this.walletModel
+      .findOne({ userId, isActive: true })
+      .exec();
+
     if (existingWallet) {
-      throw new BadRequestException('Wallet already exists for this user');
+      if (!options.allowReplace) {
+        throw new BadRequestException('Wallet already exists for this user');
+      }
+
+      existingWallet.isActive = false;
+      await existingWallet.save();
+      deactivatedWallet = existingWallet;
     }
 
     // Generate wallet address and keys (without deploying)
@@ -63,9 +73,71 @@ export class WalletService {
       isDeployed: false,
     });
 
-    await wallet.save();
+    try {
+      await wallet.save();
+      return { wallet, address, privateKey };
+    } catch (error) {
+      if (deactivatedWallet) {
+        deactivatedWallet.isActive = true;
+        await deactivatedWallet.save();
+      }
+      throw error;
+    }
+  }
 
-    return { wallet, address, privateKey };
+  async verifyPrivateKeyOwnership(
+    userId: string,
+    privateKey: string,
+  ): Promise<{
+    wallet: WalletDocument;
+    normalizedPrivateKey: string;
+    publicKey: string;
+  }> {
+    const wallet = await this.getWalletByUserId(userId);
+    if (!wallet || !wallet.isActive) {
+      throw new NotFoundException('Active wallet not found for this user');
+    }
+
+    const derived = await this.blockchainService.deriveWalletFromPrivateKey(
+      privateKey,
+    );
+
+    if (derived.address.toLowerCase() !== wallet.address.toLowerCase()) {
+      throw new BadRequestException(
+        'Private key does not match the active wallet',
+      );
+    }
+
+    return {
+      wallet,
+      normalizedPrivateKey: derived.normalizedPrivateKey,
+      publicKey: derived.publicKey,
+    };
+  }
+
+  async resetWalletPasswordWithPrivateKey(
+    userId: string,
+    privateKey: string,
+    newPassword: string,
+  ): Promise<WalletDocument> {
+    const { wallet, normalizedPrivateKey, publicKey } =
+      await this.verifyPrivateKeyOwnership(userId, privateKey);
+
+    const passwordHash = await this.encryptionService.hashPassword(newPassword);
+    const encryptionSalt = this.encryptionService.generateSalt();
+    const { encrypted, iv } = await this.encryptionService.encryptPrivateKey(
+      normalizedPrivateKey,
+      newPassword,
+      encryptionSalt,
+    );
+
+    wallet.passwordHash = passwordHash;
+    wallet.encryptionSalt = encryptionSalt;
+    wallet.iv = iv;
+    wallet.encryptedPrivateKey = encrypted;
+    wallet.publicKey = publicKey;
+
+    return wallet.save();
   }
 
   /**
@@ -112,7 +184,7 @@ export class WalletService {
    * Get wallet by user ID
    */
   async getWalletByUserId(userId: string): Promise<WalletDocument | null> {
-    return this.walletModel.findOne({ userId }).exec();
+    return this.walletModel.findOne({ userId, isActive: true }).exec();
   }
 
   /**

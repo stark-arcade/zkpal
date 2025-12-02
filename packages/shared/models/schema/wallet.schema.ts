@@ -7,7 +7,7 @@ export type WalletDocument = Wallet & Document;
   timestamps: true,
 })
 export class Wallet {
-  @Prop({ required: true, unique: true, ref: 'User' })
+  @Prop({ required: true, ref: 'User', index: true })
   userId: mongoose.Types.ObjectId; // Reference to User
 
   @Prop({ required: true, unique: true })
@@ -31,7 +31,7 @@ export class Wallet {
   @Prop({ default: 'ztarknet' })
   network: string;
 
-  @Prop({ default: true })
+  @Prop({ default: true, index: true })
   isActive: boolean;
 
   @Prop({ default: false })
@@ -42,5 +42,13 @@ export class Wallet {
 }
 
 export const WalletSchema = SchemaFactory.createForClass(Wallet);
-WalletSchema.index({ userId: 1 }, { unique: true });
+WalletSchema.index(
+  { userId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isActive: true },
+    name: 'wallet_active_per_user',
+  },
+);
+WalletSchema.index({ userId: 1 }, { name: 'wallet_user_lookup' });
 WalletSchema.index({ address: 1 }, { unique: true });

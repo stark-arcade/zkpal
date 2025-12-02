@@ -137,6 +137,49 @@ export class BlockchainService {
   }
 
   /**
+   * Derive wallet metadata from an existing private key
+   */
+  async deriveWalletFromPrivateKey(privateKey: string): Promise<{
+    normalizedPrivateKey: string;
+    address: string;
+    publicKey: string;
+  }> {
+    try {
+      if (!privateKey || typeof privateKey !== 'string') {
+        throw new Error('Private key is required');
+      }
+
+      const normalized = privateKey.trim().toLowerCase();
+      const prefixed = normalized.startsWith('0x')
+        ? normalized
+        : `0x${normalized}`;
+
+      if (!/^0x[0-9a-f]+$/.test(prefixed)) {
+        throw new Error('Private key must be a hex string');
+      }
+
+      const publicKey = ec.starkCurve.getStarkKey(prefixed);
+      const constructorCalldata = CallData.compile({ publicKey });
+      const address = hash.calculateContractAddressFromHash(
+        publicKey,
+        CONTRACT_ADDRESS.OZACCOUNT_CLASS_HASH,
+        constructorCalldata,
+        0,
+      );
+
+      return {
+        normalizedPrivateKey: prefixed,
+        address,
+        publicKey,
+      };
+    } catch (error) {
+      throw new BadRequestException(
+        `Failed to derive wallet from private key: ${error.message}`,
+      );
+    }
+  }
+
+  /**
    * Create Account instance from private key (for transactions)
    */
   async createAccountFromPrivateKey(
