@@ -47,11 +47,12 @@ export class UIBuilderService {
     ],
     'wallets:home': [
       [
-        { text: '💰 Balance', action: 'wallet:balance' },
+        { text: '💰 Balance Native', action: 'balance:public' },
+        { text: '💰 Balance Private', action: 'balance:private' },
         { text: '🪙 Tx History', action: 'wallet:history' },
       ],
       [
-        { text: '💰 Transfer Public', action: 'wallet:transfer_public' },
+        { text: '💰 Transfer Native', action: 'wallet:transfer_public' },
         { text: '🪙 Transfer Private', action: 'wallet:transfer_private' },
       ],
       [
@@ -59,7 +60,7 @@ export class UIBuilderService {
         { text: '🔭 Unshield Token', action: 'wallet:unshield' },
       ],
       [{ text: '🔑 Export Private Key', action: 'wallet:export_key' }],
-      [{ text: '🔄 Refresh', action: 'wallet:refresh' }],
+      // [{ text: '🔄 Refresh', action: 'wallet:refresh' }],
       [{ text: '🔙 Back to Home', action: 'view:dashboard' }],
     ],
   };

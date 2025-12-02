@@ -170,11 +170,11 @@ export class TelegramService implements OnModuleInit {
     await this.renderWalletCenter(ctx);
   }
 
-  @Action('wallet:balance')
-  async handleWalletBalanceAction(@Ctx() ctx: Context) {
-    await this.renderBalancePicker(ctx, true);
-    await ctx.answerCbQuery('Select balance type');
-  }
+  // @Action('wallet:balance')
+  // async handleWalletBalanceAction(@Ctx() ctx: Context) {
+  //   // await this.renderBalancePicker(ctx, true);
+  //   await ctx.answerCbQuery('Select balance type');
+  // }
 
   @Action('wallet:history')
   async handleWalletHistoryAction(@Ctx() ctx: Context) {
@@ -330,7 +330,7 @@ export class TelegramService implements OnModuleInit {
         await this.walletHandler.buildPublicBalanceView(telegramId);
       await this.renderWalletDialog(ctx, message, [
         [Markup.button.callback('🔁 Refresh', 'balance:public')],
-        [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+        [Markup.button.callback('⬅️ Back', 'view:wallets')],
       ]);
       await ctx.answerCbQuery('Public balance requested');
     } catch (error) {
@@ -338,7 +338,7 @@ export class TelegramService implements OnModuleInit {
         return;
       }
       await this.renderWalletDialog(ctx, this.formatInlineError(error), [
-        [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+        [Markup.button.callback('⬅️ Back', 'view:wallets')],
       ]);
       await ctx.answerCbQuery('Failed to load balance', { show_alert: true });
     }
@@ -359,7 +359,7 @@ export class TelegramService implements OnModuleInit {
       );
       await this.renderWalletDialog(ctx, message, [
         [Markup.button.callback('🔁 Refresh', 'balance:private')],
-        [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+        [Markup.button.callback('⬅️ Back', 'view:wallets')],
       ]);
       await ctx.answerCbQuery('Private balance requested');
     } catch (error) {
@@ -367,7 +367,7 @@ export class TelegramService implements OnModuleInit {
         return;
       }
       await this.renderWalletDialog(ctx, this.formatInlineError(error), [
-        [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+        [Markup.button.callback('⬅️ Back', 'view:wallets')],
       ]);
       await ctx.answerCbQuery('Failed to load balance', { show_alert: true });
     }
@@ -598,22 +598,22 @@ export class TelegramService implements OnModuleInit {
       .filter((chunk) => chunk.length > 0);
   }
 
-  private async renderBalancePicker(ctx: Context, includeBackButton: boolean) {
-    const rows: InlineKeyboardButton[][] = [
-      [Markup.button.callback('🌐 Public balance', 'balance:public')],
-      [Markup.button.callback('🛡️ Private balance', 'balance:private')],
-    ];
+  // private async renderBalancePicker(ctx: Context, includeBackButton: boolean) {
+  //   // const rows: InlineKeyboardButton[][] = [
+  //   //   [Markup.button.callback('🌐 Public balance', 'balance:public')],
+  //   //   [Markup.button.callback('🛡️ Private balance', 'balance:private')],
+  //   // ];
 
-    if (includeBackButton) {
-      rows.push([Markup.button.callback('⬅️ Back', 'view:wallets')]);
-    }
+  //   if (includeBackButton) {
+  //     rows.push([Markup.button.callback('⬅️ Back', 'view:wallets')]);
+  //   }
 
-    await this.renderWalletDialog(
-      ctx,
-      'Choose which balance you want to check:',
-      rows,
-    );
-  }
+  //   await this.renderWalletDialog(
+  //     ctx,
+  //     'Choose which balance you want to check:',
+  //     rows,
+  //   );
+  // }
 
   private async startTransferWizard(ctx: Context, mode: TransferMode) {
     const telegramId = ctx.from?.id.toString();
@@ -672,8 +672,7 @@ export class TelegramService implements OnModuleInit {
   ) {
     const helperText =
       mode === 'public'
-        ? `📮 Enter the Starknet address to send ${tokenSymbol.toUpperCase()} to.\n\n` +
-          '_Reply with the recipient address (must start with 0x)._'
+        ? `📮 Enter the Starknet address to send ${tokenSymbol.toUpperCase()} to.\n\n`
         : `📮 Enter the recipient username to send ${tokenSymbol.toUpperCase()} to.\n\n` +
           '_Reply with the recipient username._';
     await this.renderWalletDialog(
@@ -693,9 +692,7 @@ export class TelegramService implements OnModuleInit {
     mode: TransferMode,
     tokenSymbol: string,
   ) {
-    const helperText =
-      `💸 Enter the amount of ${tokenSymbol.toUpperCase()} to send.\n\n` +
-      '_Reply with a positive number._';
+    const helperText = `💸 Enter the amount of ${tokenSymbol.toUpperCase()} to send.\n\n`;
 
     await this.renderWalletDialog(
       ctx,
@@ -1000,7 +997,7 @@ export class TelegramService implements OnModuleInit {
             await this.walletHandler.buildPublicBalanceView(telegramId);
           await this.renderWalletDialog(ctx, message, [
             [Markup.button.callback('🔁 Refresh', 'balance:public')],
-            [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+            [Markup.button.callback('⬅️ Back', 'view:wallets')],
           ]);
           break;
         }
@@ -1011,7 +1008,7 @@ export class TelegramService implements OnModuleInit {
           );
           await this.renderWalletDialog(ctx, message, [
             [Markup.button.callback('🔁 Refresh', 'balance:private')],
-            [Markup.button.callback('⬅️ Back', 'wallet:balance')],
+            [Markup.button.callback('⬅️ Back', 'view:wallets')],
           ]);
           break;
         }
@@ -1127,8 +1124,6 @@ export class TelegramService implements OnModuleInit {
       await this.walletHandler.handleBalance(ctx);
       return;
     }
-
-    await this.renderBalancePicker(ctx, false);
   }
 
   @Command('send')
