@@ -27,7 +27,11 @@ interface TransferWizardState {
   recipient?: string;
 }
 
-type SwapWizardStep = 'select_token_in' | 'select_token_out' | 'enter_amount' | 'confirm';
+type SwapWizardStep =
+  | 'select_token_in'
+  | 'select_token_out'
+  | 'enter_amount'
+  | 'confirm';
 
 interface SwapWizardState {
   step: SwapWizardStep;
@@ -430,7 +434,8 @@ export class TelegramService implements OnModuleInit {
       const promptMessage = await ctx.reply(
         '🔐 Please confirm by entering your password:',
       );
-      const messageIds = this.walletHandler.getPasswordMessageIds(telegramId) || {};
+      const messageIds =
+        this.walletHandler.getPasswordMessageIds(telegramId) || {};
       messageIds.promptMessageId = (promptMessage as any)?.message_id;
       this.walletHandler.setPasswordMessageIds(telegramId, messageIds);
 
@@ -1002,7 +1007,7 @@ export class TelegramService implements OnModuleInit {
   private buildTokenAmountHint(command: 'shield') {
     return (
       `Use /${command} with amount and token symbol or token address.\n\n` +
-      `Format: /${command} <amount> <token_symbol_or_address>\n` +
+      `Format: /${command} \`<amount>\` \`<token_symbol_or_address>\`\n` +
       `Example: /${command} 2 strk`
     );
   }
@@ -1024,7 +1029,7 @@ export class TelegramService implements OnModuleInit {
     const copy = sections.filter(Boolean).join('\n\n');
     const keyboardMarkup = Markup.inlineKeyboard(buttons);
     const responseOptions = {
-      parse_mode: 'Markdown' as const, //!TODO Monitor
+      // parse_mode: 'Markdown' as const, //!TODO Monitor
       reply_markup: keyboardMarkup.reply_markup,
     };
 
@@ -1440,7 +1445,8 @@ export class TelegramService implements OnModuleInit {
       await Promise.all(
         tokens.map(async (token, index) => {
           const price = await this.swapService.getPrice(token.address);
-          const isDefault = token.address.toLowerCase() === defaultToken.toLowerCase();
+          const isDefault =
+            token.address.toLowerCase() === defaultToken.toLowerCase();
           // Use symbol instead of full address to keep callback_data under 64 bytes
           return Markup.button.callback(
             `${token.symbol} ($${price.toFixed(2)})${isDefault ? ' ✓' : ''}`,
@@ -1464,10 +1470,7 @@ export class TelegramService implements OnModuleInit {
     );
   }
 
-  private async renderSwapTokenOutPicker(
-    ctx: Context,
-    tokenInAddress: string,
-  ) {
+  private async renderSwapTokenOutPicker(ctx: Context, tokenInAddress: string) {
     const tokens = this.swapService.getAvailableTokens();
     const tokenInSymbol = this.swapService.getTokenSymbol(tokenInAddress);
 

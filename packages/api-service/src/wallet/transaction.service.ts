@@ -256,7 +256,6 @@ export class TransactionService {
       walletAddress,
     );
 
-    // Execute transaction
     let txReciept: { txHash: string; root: string; rootId: string };
     try {
       txReciept = await this.blockchainService.shieldToken(
