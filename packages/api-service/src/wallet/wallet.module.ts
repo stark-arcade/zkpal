@@ -7,6 +7,7 @@ import {
 } from 'shared/models/schema/transaction.schema';
 import { WalletService } from './wallet.service';
 import { TransactionService } from './transaction.service';
+import { SwapService } from './swap.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { AuthModule } from '../auth/auth.module';
 import { Commitment, CommitmentSchema } from '@app/shared/models/schema';
@@ -20,7 +21,7 @@ import { Commitment, CommitmentSchema } from '@app/shared/models/schema';
     ]),
     AuthModule,
   ],
-  providers: [WalletService, TransactionService, BlockchainService],
-  exports: [WalletService, TransactionService, BlockchainService],
+  providers: [WalletService, TransactionService, SwapService, BlockchainService],
+  exports: [WalletService, TransactionService, SwapService, BlockchainService],
 })
 export class WalletModule {}

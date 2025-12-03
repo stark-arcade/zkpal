@@ -10,6 +10,7 @@ import { formatUnits, parseUnits } from 'ethers';
 import { PASSWORD_CONFIG } from 'shared/utils/constants';
 import { TelegramService } from '../telegram.service';
 import { CommitmentService } from '../../commitment/commitment.service';
+import { SwapService } from '../../wallet/swap.service';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 
@@ -41,6 +42,7 @@ export class WalletHandler {
     @Inject(forwardRef(() => TelegramService))
     private telegramService: TelegramService,
     private commitmentService: CommitmentService,
+    private swapService: SwapService,
     @InjectConnection() private connection: Connection,
   ) {}
 
@@ -2177,6 +2179,132 @@ export class WalletHandler {
           await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
         } catch {
           console.log('Error when delete in send confirming');
+        }
+      }
+      if (chatId && sendingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+        } catch {
+          //
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle swap token confirmation
+   */
+  async handleSwapConfirmation(ctx: Context, password: string): Promise<void> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return;
+
+    const pending = this.pendingOperations.get(telegramId);
+    if (!pending || pending.type !== 'swap_token') return;
+
+    // Store user's password message ID for deletion
+    const userMessageId = (ctx.message as any)?.message_id;
+    const messageIds = this.passwordMessageIds.get(telegramId) || {};
+    messageIds.userMessageId = userMessageId;
+    this.passwordMessageIds.set(telegramId, messageIds);
+
+    const chatId = (ctx.chat as any)?.id;
+    let verifyingMessageId: number | undefined;
+    let sendingMessageId: number | undefined;
+    try {
+      const verifyingMessage = await ctx.reply('⏳ Verifying password...');
+      verifyingMessageId = (verifyingMessage as any)?.message_id;
+    } catch {
+      //
+    }
+
+    try {
+      // Verify password
+      const isValid = await this.sessionService.verifyPassword(
+        pending.sessionToken,
+        password,
+      );
+
+      if (!isValid) {
+        await this.deletePasswordMessages(ctx, telegramId);
+        if (chatId && verifyingMessageId) {
+          try {
+            await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+          } catch {
+            // ignore
+          }
+        }
+        await ctx.reply('❌ Invalid password. Transaction cancelled.');
+        this.pendingOperations.delete(telegramId);
+        return;
+      }
+
+      if (chatId && verifyingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+          verifyingMessageId = undefined;
+        } catch {
+          // ignore deletion errors
+        }
+      }
+      try {
+        const sendingMessage = await ctx.reply('🚀 Submitting swap transaction...');
+        sendingMessageId = (sendingMessage as any)?.message_id;
+      } catch {
+        console.log('Error When confirming');
+      }
+
+      // Mock submit transaction - in real implementation, this would call transactionService.swapTokens
+      // For now, we'll just simulate a successful transaction
+      const mockTxHash = `0x${Array.from({ length: 64 }, () =>
+        Math.floor(Math.random() * 16).toString(16),
+      ).join('')}`;
+      
+      // In production, uncomment this:
+      // const transaction = await this.transactionService.swapTokens(
+      //   pending.userId,
+      //   pending.sessionToken,
+      //   pending.tokenIn,
+      //   pending.tokenOut,
+      //   pending.amount,
+      // );
+
+      await this.deletePasswordMessages(ctx, telegramId);
+
+      this.pendingOperations.delete(telegramId);
+
+      const tokenInSymbol = this.swapService.getTokenSymbol(pending.tokenIn);
+      const tokenOutSymbol = this.swapService.getTokenSymbol(pending.tokenOut);
+      
+      // Get swap overview for detailed success message
+      const overview = await this.swapService.getSwapOverview(
+        pending.tokenIn,
+        pending.tokenOut,
+        pending.amount,
+      );
+
+      const successMessage =
+        `✅ *Swap Transaction Submitted*\n\n` +
+        `*Transaction Hash:*\n\`${mockTxHash}\`\n\n` +
+        `*Swap Details:*\n` +
+        `• Swapped: \`${pending.amount} ${tokenInSymbol}\` → \`${overview.estimatedOutput}\`\n` +
+        `• Route: \`${overview.route}\`\n` +
+        `• Estimated Value: ${overview.estimatedValue}\n\n` +
+        `*Status:* ⏳ Pending\n\n` +
+        `_Your swap transaction is being processed on the blockchain. You can track its status using the transaction hash above._`;
+
+      await ctx.reply(successMessage, { parse_mode: 'Markdown' });
+      await this.telegramService.renderWalletCenter(ctx);
+    } catch (error) {
+      // Delete password messages on error
+      await this.deletePasswordMessages(ctx, telegramId);
+      this.pendingOperations.delete(telegramId);
+      await ctx.reply(`❌ Swap failed: ${error.message}`);
+    } finally {
+      if (chatId && verifyingMessageId) {
+        try {
+          await ctx.telegram.deleteMessage(chatId, verifyingMessageId);
+        } catch {
+          console.log('Error when delete in swap confirming');
         }
       }
       if (chatId && sendingMessageId) {

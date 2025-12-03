@@ -6,6 +6,8 @@ import { Telegraf, Context, Markup } from 'telegraf';
 import { InlineKeyboardButton } from 'telegraf/typings/core/types/typegram';
 import { WalletHandler } from './handlers/wallet.handler';
 import { UsersService } from '../users/users.service';
+import { SessionService } from '../auth/session.service';
+import { WalletService } from '../wallet/wallet.service';
 import {
   BuildKeyboardOptions,
   UIBuilderService,
@@ -13,6 +15,7 @@ import {
   WalletSlotConfig,
 } from './ui-builder.service';
 import { TOKENS } from '@app/shared/ztarknet/tokens';
+import { SwapService } from '../wallet/swap.service';
 
 type TransferMode = 'public' | 'private';
 type TransferWizardStep = 'select_token' | 'recipient' | 'amount';
@@ -24,6 +27,16 @@ interface TransferWizardState {
   recipient?: string;
 }
 
+type SwapWizardStep = 'select_token_in' | 'select_token_out' | 'enter_amount' | 'confirm';
+
+interface SwapWizardState {
+  step: SwapWizardStep;
+  tokenIn?: string;
+  tokenOut?: string;
+  amount?: string;
+  amountOut?: string;
+}
+
 @Update()
 @Injectable()
 export class TelegramService implements OnModuleInit {
@@ -31,10 +44,14 @@ export class TelegramService implements OnModuleInit {
     @InjectBot() private readonly bot: Telegraf<Context>,
     private walletHandler: WalletHandler,
     private usersService: UsersService,
+    private sessionService: SessionService,
+    private walletService: WalletService,
+    private swapService: SwapService,
     private readonly uiBuilder: UIBuilderService,
   ) {}
 
   private transferWizardSessions = new Map<string, TransferWizardState>();
+  private swapWizardSessions = new Map<string, SwapWizardState>();
 
   async onModuleInit() {
     await this.bot.telegram.setMyCommands([
@@ -251,6 +268,177 @@ export class TelegramService implements OnModuleInit {
       [Markup.button.callback('⬅️ Back', 'view:wallets')],
     ]);
     await ctx.answerCbQuery('Use /unshield');
+  }
+
+  @Action('wallet:swap')
+  async handleSwapAction(@Ctx() ctx: Context) {
+    await this.startSwapWizard(ctx);
+    await ctx.answerCbQuery('Starting swap...');
+  }
+
+  @Action(/swap:token_in/)
+  async handleSwapTokenInSelection(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    const data = (ctx.callbackQuery as any)?.data || '';
+    const { payload } = this.parseCallbackData(data);
+    const tokenSymbol = payload.sym;
+
+    if (!tokenSymbol) {
+      await ctx.answerCbQuery('Invalid token', { show_alert: true });
+      return;
+    }
+
+    // Find token address from symbol
+    const tokenAddress = this.walletService.findTokenAddress(tokenSymbol);
+    if (!tokenAddress) {
+      await ctx.answerCbQuery('Token not found', { show_alert: true });
+      return;
+    }
+
+    const wizard = this.swapWizardSessions.get(telegramId) || {
+      step: 'select_token_in' as SwapWizardStep,
+    };
+    wizard.tokenIn = tokenAddress;
+    wizard.step = 'select_token_out';
+    this.swapWizardSessions.set(telegramId, wizard);
+
+    await this.renderSwapTokenOutPicker(ctx, tokenAddress);
+    await ctx.answerCbQuery('Token selected');
+  }
+
+  @Action(/swap:token_out/)
+  async handleSwapTokenOutSelection(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    const data = (ctx.callbackQuery as any)?.data || '';
+    const { payload } = this.parseCallbackData(data);
+    const tokenSymbol = payload.sym;
+
+    if (!tokenSymbol) {
+      await ctx.answerCbQuery('Invalid token', { show_alert: true });
+      return;
+    }
+
+    // Find token address from symbol
+    const tokenOutAddress = this.walletService.findTokenAddress(tokenSymbol);
+    if (!tokenOutAddress) {
+      await ctx.answerCbQuery('Token not found', { show_alert: true });
+      return;
+    }
+
+    const wizard = this.swapWizardSessions.get(telegramId);
+    if (!wizard || !wizard.tokenIn) {
+      await ctx.answerCbQuery('Please select input token first', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    if (wizard.tokenIn.toLowerCase() === tokenOutAddress.toLowerCase()) {
+      await ctx.answerCbQuery('Cannot swap same token', { show_alert: true });
+      return;
+    }
+
+    wizard.tokenOut = tokenOutAddress;
+    wizard.step = 'enter_amount';
+    this.swapWizardSessions.set(telegramId, wizard);
+
+    await this.renderSwapAmountPrompt(ctx, wizard.tokenIn, tokenOutAddress);
+    await ctx.answerCbQuery('Token selected');
+  }
+
+  @Action('swap:cancel')
+  async handleSwapCancel(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    this.resetSwapWizard(telegramId);
+    await this.renderWalletCenter(ctx);
+    await ctx.answerCbQuery('Swap cancelled');
+  }
+
+  @Action('swap:confirm')
+  async handleSwapConfirm(@Ctx() ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery('Unable to identify user', { show_alert: true });
+      return;
+    }
+
+    const wizard = this.swapWizardSessions.get(telegramId);
+    if (!wizard || !wizard.tokenIn || !wizard.tokenOut || !wizard.amount) {
+      await ctx.answerCbQuery('Invalid swap data', { show_alert: true });
+      return;
+    }
+
+    try {
+      const user = await this.usersService.getUserByTelegramId(telegramId);
+      if (!user || !user.isWalletCreated) {
+        await ctx.answerCbQuery('Wallet not found', { show_alert: true });
+        return;
+      }
+
+      const session =
+        await this.sessionService.getSessionByTelegramId(telegramId);
+      if (!session || !session.isWalletUnlocked()) {
+        // Set up inline unlock
+        await this.walletHandler.setupInlineUnlock(
+          ctx,
+          telegramId,
+          'swap:confirm',
+        );
+        const promptMessage = await this.renderWalletDialog(
+          ctx,
+          '🔐 *Wallet Locked*\n\nPlease enter your password to unlock:',
+          [[Markup.button.callback('⬅️ Cancel', 'unlock:cancel')]],
+        );
+        if (promptMessage) {
+          const messageIds =
+            this.walletHandler.getPasswordMessageIds(telegramId) || {};
+          messageIds.promptMessageId = promptMessage;
+          this.walletHandler.setPasswordMessageIds(telegramId, messageIds);
+        }
+        await ctx.answerCbQuery('Wallet locked - enter password');
+        return;
+      }
+
+      // Store pending operation for password confirmation
+      const pendingOperation = {
+        type: 'swap_token',
+        userId: user._id.toString(),
+        sessionToken: session.sessionToken,
+        tokenIn: wizard.tokenIn,
+        tokenOut: wizard.tokenOut,
+        amount: wizard.amount,
+        amountOut: wizard.amountOut,
+      };
+
+      // Store pending operation using the handler's method
+      const pendingOps = (this.walletHandler as any).pendingOperations;
+      if (pendingOps) {
+        pendingOps.set(telegramId, pendingOperation);
+      }
+
+      // Prompt for password
+      const promptMessage = await ctx.reply(
+        '🔐 Please confirm by entering your password:',
+      );
+      const messageIds = this.walletHandler.getPasswordMessageIds(telegramId) || {};
+      messageIds.promptMessageId = (promptMessage as any)?.message_id;
+      this.walletHandler.setPasswordMessageIds(telegramId, messageIds);
+
+      this.resetSwapWizard(telegramId);
+      await ctx.answerCbQuery('Enter password to confirm');
+    } catch (error) {
+      await ctx.answerCbQuery('Error: ' + error.message, { show_alert: true });
+    }
   }
 
   @Action('wallet:reset_wallet_password')
@@ -1158,9 +1346,19 @@ export class TelegramService implements OnModuleInit {
       return;
     }
 
+    // Check for transfer wizard input
     const wizard = this.transferWizardSessions.get(telegramId);
     if (wizard) {
       const handled = await this.handleTransferWizardInput(ctx, wizard, text);
+      if (handled) {
+        return;
+      }
+    }
+
+    // Check for swap wizard input (before pending operations)
+    const swapWizard = this.swapWizardSessions.get(telegramId);
+    if (swapWizard && swapWizard.step === 'enter_amount') {
+      const handled = await this.handleSwapWizardInput(ctx, swapWizard, text);
       if (handled) {
         return;
       }
@@ -1207,8 +1405,225 @@ export class TelegramService implements OnModuleInit {
       case 'reset_wallet_password':
         await this.walletHandler.handleResetPasswordWallet(ctx, text);
         break;
+      case 'swap_token':
+        await this.walletHandler.handleSwapConfirmation(ctx, text);
+        break;
       default:
         await ctx.reply('Unknown operation. Please try again.');
     }
+  }
+
+  private async startSwapWizard(ctx: Context) {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) {
+      await ctx.answerCbQuery?.('Unable to identify user', {
+        show_alert: true,
+      });
+      return;
+    }
+
+    // Initialize with default token (STRK)
+    const defaultToken = this.swapService.getDefaultToken();
+    this.swapWizardSessions.set(telegramId, {
+      step: 'select_token_in',
+      tokenIn: defaultToken,
+    });
+
+    await this.renderSwapTokenInPicker(ctx);
+  }
+
+  private async renderSwapTokenInPicker(ctx: Context) {
+    const tokens = this.swapService.getAvailableTokens();
+    const defaultToken = this.swapService.getDefaultToken();
+
+    const tokenRows = this.chunkButtons(
+      await Promise.all(
+        tokens.map(async (token, index) => {
+          const price = await this.swapService.getPrice(token.address);
+          const isDefault = token.address.toLowerCase() === defaultToken.toLowerCase();
+          // Use symbol instead of full address to keep callback_data under 64 bytes
+          return Markup.button.callback(
+            `${token.symbol} ($${price.toFixed(2)})${isDefault ? ' ✓' : ''}`,
+            `swap:token_in|sym=${token.symbol.toLowerCase()}`,
+          );
+        }),
+      ),
+      1,
+    );
+
+    const footer: InlineKeyboardButton[][] = [
+      [Markup.button.callback('❌ Cancel', 'swap:cancel')],
+    ];
+
+    await this.renderWalletDialog(
+      ctx,
+      '🔄 *Token Swap*\n\n' +
+        'Step 1/4: Choose the token you want to swap\n\n' +
+        '_Select the token you want to swap FROM:_',
+      [...tokenRows, ...footer],
+    );
+  }
+
+  private async renderSwapTokenOutPicker(
+    ctx: Context,
+    tokenInAddress: string,
+  ) {
+    const tokens = this.swapService.getAvailableTokens();
+    const tokenInSymbol = this.swapService.getTokenSymbol(tokenInAddress);
+
+    // Filter out the selected input token
+    const availableTokens = tokens.filter(
+      (t) => t.address.toLowerCase() !== tokenInAddress.toLowerCase(),
+    );
+
+    const tokenRows = this.chunkButtons(
+      await Promise.all(
+        availableTokens.map(async (token) => {
+          const price = await this.swapService.getPrice(token.address);
+          // Use symbol instead of full address to keep callback_data under 64 bytes
+          return Markup.button.callback(
+            `${token.symbol} ($${price.toFixed(2)})`,
+            `swap:token_out|sym=${token.symbol.toLowerCase()}`,
+          );
+        }),
+      ),
+      1,
+    );
+
+    const footer: InlineKeyboardButton[][] = [
+      [Markup.button.callback('⬅️ Back', 'wallet:swap')],
+      [Markup.button.callback('❌ Cancel', 'swap:cancel')],
+    ];
+
+    await this.renderWalletDialog(
+      ctx,
+      '🔄 *Token Swap*\n\n' +
+        `Step 2/4: Choose target token\n\n` +
+        `Swapping FROM: *${tokenInSymbol}*\n` +
+        `_Select the token you want to swap TO:_`,
+      [...tokenRows, ...footer],
+    );
+  }
+
+  private async renderSwapAmountPrompt(
+    ctx: Context,
+    tokenInAddress: string,
+    tokenOutAddress: string,
+  ) {
+    const tokenInSymbol = this.swapService.getTokenSymbol(tokenInAddress);
+    const tokenOutSymbol = this.swapService.getTokenSymbol(tokenOutAddress);
+
+    const footer: InlineKeyboardButton[][] = [
+      [Markup.button.callback('⬅️ Back', 'wallet:swap')],
+      [Markup.button.callback('❌ Cancel', 'swap:cancel')],
+    ];
+
+    await this.renderWalletDialog(
+      ctx,
+      '🔄 *Token Swap*\n\n' +
+        `Step 3/4: Enter amount\n\n` +
+        `Swapping: *${tokenInSymbol}* → *${tokenOutSymbol}*\n\n` +
+        `_Enter the amount of ${tokenInSymbol} you want to swap:_`,
+      footer,
+    );
+
+    await this.sendForceReplyPrompt(
+      ctx,
+      `Enter ${tokenInSymbol} amount to swap:`,
+    );
+  }
+
+  private async renderSwapConfirmation(
+    ctx: Context,
+    tokenInAddress: string,
+    tokenOutAddress: string,
+    amount: string,
+    amountOut: string,
+  ) {
+    // Get detailed swap overview
+    const overview = await this.swapService.getSwapOverview(
+      tokenInAddress,
+      tokenOutAddress,
+      amount,
+    );
+
+    const buttons: InlineKeyboardButton[][] = [
+      [Markup.button.callback('✅ Confirm Swap', 'swap:confirm')],
+      [Markup.button.callback('❌ Cancel', 'swap:cancel')],
+    ];
+
+    const message =
+      '🔄 *Token Swap*\n\n' +
+      `*Step 4/4: Confirm Swap*\n\n` +
+      `*Swap Details:*\n` +
+      `• *From:* \`${overview.from.amount} ${overview.from.symbol}\`\n` +
+      `• *To:* \`${overview.to.symbol}\`\n` +
+      `• *Est. Value:* ${overview.estimatedValue}\n` +
+      `• *Est. Output:* \`${overview.estimatedOutput}\`\n` +
+      `• *Route:* \`${overview.route}\`\n\n` +
+      `▲ *Important Notes:*\n` +
+      `• Prices may change before execution\n` +
+      `• Gas fees will apply\n` +
+      `• This action cannot be undone\n\n` +
+      `_Ready to swap?_`;
+
+    await this.renderWalletDialog(ctx, message, buttons);
+  }
+
+  private async handleSwapWizardInput(
+    ctx: Context,
+    wizard: SwapWizardState,
+    text: string,
+  ): Promise<boolean> {
+    const telegramId = ctx.from?.id.toString();
+    if (!telegramId) return false;
+
+    if (wizard.step !== 'enter_amount') {
+      return false;
+    }
+
+    // Validate amount
+    if (!this.swapService.validateAmount(text)) {
+      await ctx.reply(
+        '❌ Invalid amount. Please enter a valid positive number.',
+      );
+      return true;
+    }
+
+    if (!wizard.tokenIn || !wizard.tokenOut) {
+      await ctx.reply('❌ Missing token selection. Please restart swap.');
+      return true;
+    }
+
+    try {
+      // Simulate swap to get output amount
+      const amountOut = await this.swapService.simulateSwap(
+        wizard.tokenIn,
+        wizard.tokenOut,
+        text,
+      );
+
+      wizard.amount = text.trim();
+      wizard.amountOut = amountOut;
+      wizard.step = 'confirm';
+      this.swapWizardSessions.set(telegramId, wizard);
+
+      await this.renderSwapConfirmation(
+        ctx,
+        wizard.tokenIn,
+        wizard.tokenOut,
+        wizard.amount,
+        wizard.amountOut,
+      );
+      return true;
+    } catch (error) {
+      await ctx.reply(`❌ Error: ${error.message}`);
+      return true;
+    }
+  }
+
+  private resetSwapWizard(telegramId?: string) {
+    if (!telegramId) return;
+    this.swapWizardSessions.delete(telegramId);
   }
 }

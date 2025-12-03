@@ -53,6 +53,9 @@ export class UIBuilderService {
         { text: '🪙 Transfer Private', action: 'wallet:transfer_private' },
       ],
       [
+        { text: '🔄 Swap Token', action: 'wallet:swap' },
+      ],
+      [
         { text: '🌉 Shield Token', action: 'wallet:shield' },
         { text: '🔭 Unshield Token', action: 'wallet:unshield' },
       ],
