@@ -1599,9 +1599,7 @@ export class WalletHandler {
         message += `• ${token}: ${amount}\n`;
       }
     }
-    for (const balance of balances) {
-      message += `\n- ${balance.token}: ${balance.amount}`;
-    }
+
     return message;
   }
 
@@ -2247,7 +2245,9 @@ export class WalletHandler {
         }
       }
       try {
-        const sendingMessage = await ctx.reply('🚀 Submitting swap transaction...');
+        const sendingMessage = await ctx.reply(
+          '🚀 Submitting swap transaction...',
+        );
         sendingMessageId = (sendingMessage as any)?.message_id;
       } catch {
         console.log('Error When confirming');
@@ -2258,7 +2258,7 @@ export class WalletHandler {
       const mockTxHash = `0x${Array.from({ length: 64 }, () =>
         Math.floor(Math.random() * 16).toString(16),
       ).join('')}`;
-      
+
       // In production, uncomment this:
       // const transaction = await this.transactionService.swapTokens(
       //   pending.userId,
@@ -2274,7 +2274,7 @@ export class WalletHandler {
 
       const tokenInSymbol = this.swapService.getTokenSymbol(pending.tokenIn);
       const tokenOutSymbol = this.swapService.getTokenSymbol(pending.tokenOut);
-      
+
       // Get swap overview for detailed success message
       const overview = await this.swapService.getSwapOverview(
         pending.tokenIn,

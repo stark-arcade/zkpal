@@ -825,18 +825,14 @@ export class TelegramService implements OnModuleInit {
     const helperText =
       mode === 'public'
         ? `📮 Enter the Starknet address to send ${tokenSymbol.toUpperCase()} to.\n\n`
-        : `📮 Enter the recipient username to send ${tokenSymbol.toUpperCase()} to.\n\n` +
-          '_Reply with the recipient username._';
+        : `📮 Enter the recipient username to send ${tokenSymbol.toUpperCase()} to.\n\n`;
     await this.renderWalletDialog(
       ctx,
-      helperText,
+      ``,
       this.buildTransferPromptButtons(mode),
     );
 
-    await this.sendForceReplyPrompt(
-      ctx,
-      `Enter ${tokenSymbol.toUpperCase()} recipient address (must start with 0x):`,
-    );
+    await this.sendForceReplyPrompt(ctx, helperText);
   }
 
   private async renderTransferAmountPrompt(
