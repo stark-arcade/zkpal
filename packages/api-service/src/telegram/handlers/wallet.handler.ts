@@ -1276,7 +1276,6 @@ export class WalletHandler {
 
       if (!isValid) {
         await this.deletePasswordMessages(ctx, telegramId);
-        await ctx.reply('❌ Invalid password. Deployment cancelled.');
         this.pendingOperations.delete(telegramId);
         return;
       }
