@@ -269,7 +269,7 @@ export class BlockchainService {
       const parsedAmount = parseUnits(amount, 18);
       const { transaction_hash: txHash } = await account.execute([
         {
-          contractAddress: CONTRACT_ADDRESS.ZTARKNET_TOKEN,
+          contractAddress: tokenAddress,
           entrypoint: 'approve',
           calldata: CallData.compile({
             spender: CONTRACT_ADDRESS.ZKPAL,

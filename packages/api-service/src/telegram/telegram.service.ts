@@ -1016,7 +1016,11 @@ export class TelegramService implements OnModuleInit {
     const telegramId = ctx.from?.id.toString();
 
     const balance = await this.walletHandler.buildPublicBalanceView(telegramId);
-    const sections = [balance];
+    const privateBalances = await this.walletHandler.buildPrivateBalanceView(
+      telegramId,
+      ctx.from?.username,
+    );
+    const sections = [balance, privateBalances];
 
     if (body) {
       sections.push(body);
@@ -1459,7 +1463,7 @@ export class TelegramService implements OnModuleInit {
 
     await this.renderWalletDialog(
       ctx,
-      '🔄 *Token Swap*\n\n' +
+      '🔄 *Token Private Swap*\n\n' +
         'Step 1/4: Choose the token you want to swap\n\n' +
         '_Select the token you want to swap FROM:_',
       [...tokenRows, ...footer],
@@ -1496,7 +1500,7 @@ export class TelegramService implements OnModuleInit {
 
     await this.renderWalletDialog(
       ctx,
-      '🔄 *Token Swap*\n\n' +
+      '🔄 *Token Private Swap*\n\n' +
         `Step 2/4: Choose target token\n\n` +
         `Swapping FROM: *${tokenInSymbol}*\n` +
         `_Select the token you want to swap TO:_`,
@@ -1519,7 +1523,7 @@ export class TelegramService implements OnModuleInit {
 
     await this.renderWalletDialog(
       ctx,
-      '🔄 *Token Swap*\n\n' +
+      '🔄 *Token Private Swap*\n\n' +
         `Step 3/4: Enter amount\n\n` +
         `Swapping: *${tokenInSymbol}* → *${tokenOutSymbol}*\n\n` +
         `_Enter the amount of ${tokenInSymbol} you want to swap:_`,
@@ -1552,7 +1556,7 @@ export class TelegramService implements OnModuleInit {
     ];
 
     const message =
-      '🔄 *Token Swap*\n\n' +
+      '🔄 *Token Private Swap*\n\n' +
       `*Step 4/4: Confirm Swap*\n\n` +
       `*Swap Details:*\n` +
       `• *From:* \`${overview.from.amount} ${overview.from.symbol}\`\n` +
