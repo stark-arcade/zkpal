@@ -296,7 +296,7 @@ export class BlockchainService {
         }
 
         this.updateRelayerNonce(BigInt(nonce) + 1n);
-        await sleep(7000);
+        await sleep(15000);
       }
 
       const exeOpt = {
@@ -377,7 +377,7 @@ export class BlockchainService {
         }
 
         this.updateRelayerNonce(BigInt(nonce) + 1n);
-        await sleep(7000);
+        await sleep(15000);
       }
 
       const exeOpt = {
@@ -456,7 +456,7 @@ export class BlockchainService {
         }
         this.updateRelayerNonce(BigInt(nonce) + 1n);
       }
-      await sleep(7000);
+      await sleep(15000);
 
       const exeOpt = {
         nonce: nonce,
