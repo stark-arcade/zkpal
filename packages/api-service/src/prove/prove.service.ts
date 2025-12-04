@@ -187,7 +187,7 @@ export class Prove {
     return nullifier;
   }
 
-  static shortenCommitment(commitment: string) {
+  static shortenCommitment(commitment: Field) {
     return `0x${(BigInt(commitment) & MASK_251).toString(16)}`;
   }
 

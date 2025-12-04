@@ -19,6 +19,7 @@ export class Transaction {
     | 'send'
     | 'receive'
     | 'swap'
+    | 'private_swap'
     | 'shield'
     | 'private_transact'
     | 'unshield'; // Transaction type
@@ -37,6 +38,12 @@ export class Transaction {
 
   @Prop({ default: 'pending' })
   status: 'pending' | 'confirmed' | 'failed';
+
+  @Prop()
+  tokenAddressOut?: string; // Token contract address for swap
+
+  @Prop()
+  amountOut?: string; // Amount (as string for precision) for swap
 
   @Prop()
   blockNumber?: number;

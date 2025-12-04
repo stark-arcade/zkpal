@@ -14,10 +14,17 @@ import {
   Contract,
   uint256,
   AccountInterface,
+  num,
 } from 'starknet';
 import { Prove } from '../prove/prove.service';
 import { ZKPAL_ABI } from '@app/shared/ztarknet/abi/zkpal';
-import { TPublicInputTransact } from '@app/shared/ztarknet/type';
+import { Field, TPublicInputTransact } from '@app/shared/ztarknet/type';
+import { ROUTE_ABI } from '@app/shared/ztarknet/abi/route';
+import configuration from '@app/shared/config/configuration';
+
+export function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 @Injectable()
 export class BlockchainService {
@@ -262,11 +269,13 @@ export class BlockchainService {
     account: AccountInterface,
     tokenAddress: string,
     amount: string,
-    commitment: string,
+    commitment: Field,
   ): Promise<{ txHash: string; root: string; rootId: string }> {
     try {
       const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
       const parsedAmount = parseUnits(amount, 18);
+      // sleep to avoid duplicate nonce
+      await sleep(5000);
       const { transaction_hash: txHash } = await account.execute([
         {
           contractAddress: tokenAddress,
@@ -287,7 +296,8 @@ export class BlockchainService {
         },
       ]);
       const txReciept = await myProvider.waitForTransaction(txHash);
-
+      // sleep to avoid duplicate nonce
+      await sleep(3000);
       // Parse event NewLeafInserted to get root
       const zkPalContract = new Contract({
         abi: ZKPAL_ABI,
@@ -319,18 +329,62 @@ export class BlockchainService {
   /**
    * Swap tokens (if implementing DEX integration)
    */
-  async swapTokens(
+  async privateSwapTokens(
     account: any,
     tokenIn: string,
     tokenOut: string,
     amountIn: string,
+    mintAmountOut: string = '0',
     slippage: number = 0.5,
-  ): Promise<string> {
+  ): Promise<{ txHash: string; amoutOut: bigint }> {
     try {
-      // TODO: Implement DEX swap logic
+      const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
+      const parsedAmount = parseUnits(amountIn, 18);
+      // sleep to avoid duplicate nonce
+      await sleep(5000);
+      const { transaction_hash: txHash } = await account.execute(
+        [
+          {
+            contractAddress: tokenIn,
+            entrypoint: 'approve',
+            calldata: CallData.compile({
+              spender: CONTRACT_ADDRESS.AMM_ROUTER,
+              amount: uint256.bnToUint256(parsedAmount),
+            }),
+          },
+          {
+            contractAddress: CONTRACT_ADDRESS.AMM_ROUTER,
+            entrypoint: 'swap',
+            calldata: CallData.compile({
+              token_in: tokenIn,
+              amount: uint256.bnToUint256(parsedAmount),
+            }),
+          },
+        ],
+        { version: 3, skipValidate: true },
+      );
+      const txReceipt = await myProvider.waitForTransaction(txHash);
 
-      const txHash = '0x';
-      return txHash;
+      // Parse event Transfer to get amountOut
+      const zkPalContract = new Contract({
+        abi: erc20Abi,
+        address: tokenOut,
+        providerOrAccount: myProvider,
+      });
+
+      const events = zkPalContract.parseEvents(txReceipt);
+      const transferEvents = events.filter((ev) =>
+        Object.keys(ev).some((key) => key.includes('Transfer')),
+      );
+
+      let amoutOut = 0n;
+      for (let i = 0; i < transferEvents.length; i++) {
+        const event: any = Object.values(transferEvents[i])[0];
+        if (num.toHex(event.to) === configuration().relayer.ADDRESS) {
+          amoutOut = event.value as bigint;
+        }
+      }
+      return { txHash, amoutOut };
     } catch (error) {
       throw new BadRequestException(`Failed to swap tokens: ${error.message}`);
     }
@@ -350,6 +404,7 @@ export class BlockchainService {
     try {
       //1. execute tx
       const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
+      await sleep(5000);
       const { transaction_hash: txHash } = await account.execute(
         [
           {
@@ -370,8 +425,8 @@ export class BlockchainService {
                 token_out: publicInput.tokenOut,
                 recipient_withdraw: publicInput.recipientWithdraw,
               },
-              zkp: [],
-              proof: fullPoof,
+              zkp: fullPoof,
+              proof: [],
             }),
           },
         ],
@@ -383,6 +438,8 @@ export class BlockchainService {
 
       //2. get tx roots from tx receipt
       const txReceipt = await myProvider.waitForTransaction(txHash);
+      // sleep to avoid duplicate nonce
+      await sleep(3000);
       const zkPalContract = new Contract({
         abi: ZKPAL_ABI,
         address: CONTRACT_ADDRESS.ZKPAL,
@@ -427,10 +484,25 @@ export class BlockchainService {
         rootChangeId: rootChangeId,
       };
     } catch (error) {
+      console.log(error);
       throw new BadRequestException(
         `Failed to private transact: ${error.message}`,
       );
     }
+  }
+
+  async getReserves(tokenA: string, tokenB: string): Promise<[bigint, bigint]> {
+    const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
+
+    // TODO: search token pair of tokenA and tokenB
+    const pairContract = new Contract({
+      abi: ROUTE_ABI,
+      address: CONTRACT_ADDRESS.AMM_ROUTER,
+      providerOrAccount: myProvider,
+    });
+
+    const reservers = await pairContract.get_reserves();
+    return [reservers[0], reservers[1]];
   }
 
   /**

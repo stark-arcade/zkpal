@@ -88,7 +88,9 @@ export class CommitmentService {
     }
 
     if (totalBalance < totalAmountToSend) {
-      throw new Error(`Not enough commiment. You only have ${totalBalance}`);
+      throw new Error(
+        `Not enough commiment. You only have ${formatUnits(totalBalance, 18)}`,
+      );
     }
 
     return filteredCommitments;

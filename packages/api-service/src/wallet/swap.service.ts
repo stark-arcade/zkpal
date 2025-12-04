@@ -1,9 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { TOKENS } from '@app/shared/ztarknet/tokens';
+import { BlockchainService } from '../blockchain/blockchain.service';
+import { formatUnits, parseUnits } from 'ethers';
+import { CONTRACT_ADDRESS } from '@app/shared/ztarknet/constants';
 
 @Injectable()
 export class SwapService {
-  async getPrice(tokenAddress: string): Promise<number> {
+  constructor(private blockchainService: BlockchainService) {}
+
+  async getMockPrice(tokenAddress: string): Promise<number> {
     const mockPrices: Record<string, number> = {
       // STRK (native token)
       '0x01ad102b4c4b3e40a51b6fb8a446275d600555bd63a95cdceed3e5cef8a6bc1d': 50.0,
@@ -15,27 +20,90 @@ export class SwapService {
     return mockPrices[tokenAddress.toLowerCase()] || 1.0;
   }
 
+  getPriceImpact(
+    reserveA: bigint,
+    reserveB: bigint,
+    amountIn: bigint,
+    isTokenAIn = true,
+  ): number {
+    const rA = BigInt(reserveA);
+    const rB = BigInt(reserveB);
+    const input = BigInt(amountIn);
+
+    const inputWithFee = input;
+    const newReserveA = isTokenAIn ? rA + input : rA;
+    const newReserveB = isTokenAIn ? rB : rB + input;
+
+    const currentPrice = Number(rB) / Number(rA);
+    const newPrice = Number(newReserveB) / Number(newReserveA + inputWithFee);
+
+    return Math.abs((currentPrice - newPrice) / currentPrice) * 100; // in %
+  }
+
+  async getMinAmoutOut(
+    tokenA: string,
+    tokenB: string,
+    amountIn: string,
+    slippagePercent = 0.5,
+  ): Promise<{ amountOut: bigint; priceImpact: number }> {
+    const [resA, resB] = await this.blockchainService.getReserves(
+      tokenA,
+      tokenB,
+    );
+
+    const rIn = tokenA === CONTRACT_ADDRESS.ZTARKNET_TOKEN ? resA : resB;
+    const rOut = CONTRACT_ADDRESS.ZTARKNET_TOKEN ? resB : resA;
+
+    const parsedAmountIn = parseUnits(amountIn, 18);
+
+    if (resA === 0n || resB === 0n) return undefined;
+    const numerator = parsedAmountIn * rOut;
+    const denominator = rIn + parsedAmountIn;
+
+    const amountOut = numerator / denominator;
+
+    const slippageMultiplier = BigInt(
+      Math.floor((100 - slippagePercent) * 1000),
+    ); // e.g. 99.5% → 995
+    // Price = reserveB / reserveA → how much TokenB you get for 1 TokenA
+    const minAmountOut = (amountOut * slippageMultiplier) / 100000n;
+
+    return {
+      amountOut: minAmountOut,
+      priceImpact: this.getPriceImpact(
+        rIn,
+        rOut,
+        parsedAmountIn,
+        tokenA === CONTRACT_ADDRESS.ZTARKNET_TOKEN,
+      ),
+    };
+  }
+
   async simulateSwap(
     tokenInAddress: string,
     tokenOutAddress: string,
     amountIn: string,
-  ): Promise<string> {
+  ): Promise<{ amountOut: string; priceImpact: number }> {
     const amount = parseFloat(amountIn);
     if (isNaN(amount) || amount <= 0) {
       throw new Error('Invalid amount. Must be a positive number.');
     }
 
     //!TODO Replace with real price fetching logic
-    const priceIn = await this.getPrice(tokenInAddress);
-    const priceOut = await this.getPrice(tokenOutAddress);
+    const amoutOut = await this.getMinAmoutOut(
+      tokenInAddress,
+      tokenOutAddress,
+      amountIn,
+    );
 
-    const valueInUSD = amount * priceIn;
-    const amountOut = valueInUSD / priceOut;
+    if (!amoutOut) {
+      throw new Error('Insufficient liquidity');
+    }
 
-    //  Mock slippage of 0.5%
-    const amountOutWithSlippage = amountOut * 0.995;
-
-    return amountOutWithSlippage.toFixed(6);
+    return {
+      amountOut: formatUnits(amoutOut.amountOut, 18),
+      priceImpact: amoutOut.priceImpact,
+    };
   }
 
   getTokenSymbol(tokenAddress: string): string {
@@ -76,6 +144,7 @@ export class SwapService {
     tokenInAddress: string,
     tokenOutAddress: string,
     amountIn: string,
+    amountOut: string,
   ): Promise<{
     from: { amount: string; symbol: string };
     to: { symbol: string };
@@ -90,15 +159,13 @@ export class SwapService {
       throw new Error('Invalid amount');
     }
 
-    const priceIn = await this.getPrice(tokenInAddress);
-    const priceOut = await this.getPrice(tokenOutAddress);
+    const priceIn = await this.getMockPrice(tokenInAddress);
+    const priceOut = await this.getMockPrice(tokenOutAddress);
     const tokenInSymbol = this.getTokenSymbol(tokenInAddress);
     const tokenOutSymbol = this.getTokenSymbol(tokenOutAddress);
 
     // Calculate estimated output
     const valueInUSD = amount * priceIn;
-    const amountOut = valueInUSD / priceOut;
-    const amountOutWithSlippage = amountOut * 0.995; // Apply 0.5% slippage
 
     return {
       from: {
@@ -109,7 +176,7 @@ export class SwapService {
         symbol: tokenOutSymbol,
       },
       estimatedValue: `~$${valueInUSD.toFixed(2)}`,
-      estimatedOutput: `${amountOutWithSlippage.toFixed(6)} ${tokenOutSymbol}`,
+      estimatedOutput: `${amountOut} ${tokenOutSymbol}`,
       route: `${tokenInSymbol} → ${tokenOutSymbol}`,
       priceIn,
       priceOut,

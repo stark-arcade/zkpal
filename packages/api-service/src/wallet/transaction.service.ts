@@ -14,9 +14,12 @@ import { WalletService } from './wallet.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
 import { Commitment, CommitmentDocument } from '@app/shared/models/schema';
 import {
+  Field,
   TPublicInputTransact,
   TTransactCommitment,
 } from '@app/shared/ztarknet/type';
+import configuration from '@app/shared/config/configuration';
+import { formatUnits } from 'ethers';
 
 @Injectable()
 export class TransactionService {
@@ -111,6 +114,7 @@ export class TransactionService {
       newCommitments: TTransactCommitment;
     },
     tokenSymbol?: string,
+    isRelayer: boolean = false,
   ) {
     // Get session and verify wallet is unlocked
     const isUnlocked = await this.sessionService.isWalletUnlocked(sessionToken);
@@ -120,18 +124,26 @@ export class TransactionService {
       );
     }
 
-    // Get decrypted private key
-    const privateKey =
-      await this.sessionService.getDecryptedPrivateKey(sessionToken);
-
     // Get wallet address
     const walletAddress = await this.walletService.getWalletAddress(userId);
 
-    // Create account instance
-    const account = await this.blockchainService.createAccountFromPrivateKey(
-      privateKey,
-      walletAddress,
-    );
+    let account;
+    if (!isRelayer) {
+      // Get decrypted private key
+      const privateKey =
+        await this.sessionService.getDecryptedPrivateKey(sessionToken);
+
+      // Create account instance
+      account = await this.blockchainService.createAccountFromPrivateKey(
+        privateKey,
+        walletAddress,
+      );
+    } else {
+      account = await this.blockchainService.createAccountFromPrivateKey(
+        configuration().relayer.PRIVATE_KEY,
+        configuration().relayer.ADDRESS,
+      );
+    }
 
     // Execute transaction
     let txReciept: {
@@ -156,7 +168,12 @@ export class TransactionService {
       userId,
       walletAddress,
       txHash: txReciept.txHash,
-      type: publicInput.amountOut === '0' ? 'private_transact' : 'unshield',
+      type:
+        publicInput.amountOut === '0'
+          ? 'private_transact'
+          : isRelayer
+            ? 'relayer_unshield'
+            : 'unshield',
       tokenAddress: secretInput.token.toLowerCase(),
       tokenSymbol,
       amount: secretInput.amountToSend,
@@ -211,8 +228,8 @@ export class TransactionService {
       await newChangeCommitment.save();
     }
 
-    // Update session activity
-    await this.sessionService.updateActivity(sessionToken);
+    // // Update session activity
+    // await this.sessionService.updateActivity(sessionToken);
 
     return transaction;
   }
@@ -227,34 +244,45 @@ export class TransactionService {
     amount: string,
     tokenAddress: string,
     input: {
-      commitment: string;
+      commitment: Field;
       secret: string;
-      nullifier: string;
+      nullifier: Field;
       note: string;
       noteIndex: number;
     },
     tokenSymbol?: string,
+    isRelayer: boolean = false,
   ): Promise<TransactionDocument> {
     // Get session and verify wallet is unlocked
-    const isUnlocked = await this.sessionService.isWalletUnlocked(sessionToken);
-    if (!isUnlocked) {
-      throw new UnauthorizedException(
-        'Wallet is not unlocked. Please unlock it first.',
+    if (!isRelayer) {
+      const isUnlocked =
+        await this.sessionService.isWalletUnlocked(sessionToken);
+      if (!isUnlocked) {
+        throw new UnauthorizedException(
+          'Wallet is not unlocked. Please unlock it first.',
+        );
+      }
+    }
+    // Get wallet address
+    const walletAddress = await this.walletService.getWalletAddress(userId);
+    let account;
+    if (!isRelayer) {
+      const privateKey =
+        await this.sessionService.getDecryptedPrivateKey(sessionToken);
+
+      // Create account instance
+      account = await this.blockchainService.createAccountFromPrivateKey(
+        privateKey,
+        walletAddress,
+      );
+    } else {
+      account = await this.blockchainService.createAccountFromPrivateKey(
+        configuration().relayer.PRIVATE_KEY,
+        configuration().relayer.ADDRESS,
       );
     }
 
     // Get decrypted private key
-    const privateKey =
-      await this.sessionService.getDecryptedPrivateKey(sessionToken);
-
-    // Get wallet address
-    const walletAddress = await this.walletService.getWalletAddress(userId);
-
-    // Create account instance
-    const account = await this.blockchainService.createAccountFromPrivateKey(
-      privateKey,
-      walletAddress,
-    );
 
     let txReciept: { txHash: string; root: string; rootId: string };
     try {
@@ -315,65 +343,56 @@ export class TransactionService {
    */
   async swapTokens(
     userId: string,
-    sessionToken: string,
     tokenIn: string,
     tokenOut: string,
     amountIn: string,
+    mintAmountOut: string = '0',
     slippage: number = 0.5,
-  ): Promise<TransactionDocument> {
-    // Get session and verify wallet is unlocked
-    const isUnlocked = await this.sessionService.isWalletUnlocked(sessionToken);
-    if (!isUnlocked) {
-      throw new UnauthorizedException(
-        'Wallet is not unlocked. Please unlock it first.',
-      );
-    }
-
-    // Get decrypted private key
-    const privateKey =
-      await this.sessionService.getDecryptedPrivateKey(sessionToken);
-
-    // Get wallet address
-    const walletAddress = await this.walletService.getWalletAddress(userId);
-
+  ): Promise<{ txHash: string; amoutOut: string }> {
     // Create account instance
     const account = await this.blockchainService.createAccountFromPrivateKey(
-      privateKey,
-      walletAddress,
+      configuration().relayer.PRIVATE_KEY,
+      configuration().relayer.ADDRESS,
     );
 
     // Execute swap
-    let txHash: string;
+    let txReceipt: { txHash: string; amoutOut: bigint };
     try {
-      txHash = await this.blockchainService.swapTokens(
+      txReceipt = await this.blockchainService.privateSwapTokens(
         account,
         tokenIn,
         tokenOut,
         amountIn,
+        mintAmountOut,
         slippage,
       );
     } catch (error) {
       throw new BadRequestException(`Swap failed: ${error.message}`);
     }
 
+    const walletAddress = await this.walletService.getWalletAddress(userId);
+
     // Create transaction record
     const transaction = new this.transactionModel({
       userId,
       walletAddress,
-      txHash,
-      type: 'swap',
+      txHash: txReceipt.txHash,
+      type: 'private_swap',
       tokenAddress: tokenIn,
       amount: amountIn,
       recipientAddress: tokenOut,
+      tokenAddressOut: tokenOut,
+      amountOut: formatUnits(txReceipt.amoutOut, 18),
       status: 'confirmed',
     });
 
     await transaction.save();
 
     // Update session activity
-    await this.sessionService.updateActivity(sessionToken);
-
-    return transaction;
+    return {
+      txHash: transaction.txHash,
+      amoutOut: formatUnits(txReceipt.amoutOut, 18),
+    };
   }
 
   /**

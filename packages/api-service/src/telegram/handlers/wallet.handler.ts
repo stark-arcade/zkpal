@@ -13,6 +13,9 @@ import { CommitmentService } from '../../commitment/commitment.service';
 import { SwapService } from '../../wallet/swap.service';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
+import { CommitmentDocument } from '@app/shared/models/schema';
+import configuration from '@app/shared/config/configuration';
+import { CONTRACT_ADDRESS } from '@app/shared/ztarknet/constants';
 
 type ParsedTransferPayload = {
   amount: string;
@@ -2244,30 +2247,21 @@ export class WalletHandler {
         }
       }
       try {
-        const sendingMessage = await ctx.reply(
-          '🚀 Submitting swap transaction...',
-        );
-        sendingMessageId = (sendingMessage as any)?.message_id;
+        // const sendingMessage = await ctx.reply(
+        //   '🚀 Submitting swap transaction...',
+        // );
+        // sendingMessageId = (sendingMessage as any)?.message_id;
       } catch {
         console.log('Error When confirming');
       }
 
-      // Mock submit transaction - in real implementation, this would call transactionService.swapTokens
-      // For now, we'll just simulate a successful transaction
-      const mockTxHash = `0x${Array.from({ length: 64 }, () =>
-        Math.floor(Math.random() * 16).toString(16),
-      ).join('')}`;
-
-      // In production, uncomment this:
-      // const transaction = await this.transactionService.swapTokens(
-      //   pending.userId,
-      //   pending.sessionToken,
-      //   pending.tokenIn,
-      //   pending.tokenOut,
-      //   pending.amount,
-      // );
-
       await this.deletePasswordMessages(ctx, telegramId);
+
+      const { swapTxHash, amoutOut } = await this.handlePrivateSwap(
+        ctx,
+        telegramId,
+        pending,
+      );
 
       this.pendingOperations.delete(telegramId);
 
@@ -2279,17 +2273,18 @@ export class WalletHandler {
         pending.tokenIn,
         pending.tokenOut,
         pending.amount,
+        amoutOut,
       );
 
       const successMessage =
         `✅ *Swap Transaction Submitted*\n\n` +
-        `*Transaction Hash:*\n\`${mockTxHash}\`\n\n` +
+        `*Transaction Hash:*\n\`${swapTxHash}\`\n\n` +
         `*Swap Details:*\n` +
         `• Swapped: \`${pending.amount} ${tokenInSymbol}\` → \`${overview.estimatedOutput}\`\n` +
         `• Route: \`${overview.route}\`\n` +
         `• Estimated Value: ${overview.estimatedValue}\n\n` +
-        `*Status:* ⏳ Pending\n\n` +
-        `_Your swap transaction is being processed on the blockchain. You can track its status using the transaction hash above._`;
+        `*Status:* ✅ Success\n\n` +
+        `_Your swap transaction is being processed privately on the blockchain._`;
 
       await ctx.reply(successMessage, { parse_mode: 'Markdown' });
       await this.telegramService.renderWalletCenter(ctx);
@@ -2314,5 +2309,179 @@ export class WalletHandler {
         }
       }
     }
+  }
+
+  private async handlePrivateSwap(
+    ctx: Context,
+    telegramId: string,
+    pending: any,
+  ): Promise<{ swapTxHash: string; amoutOut: string }> {
+    const chatId = (ctx.chat as any)?.id;
+    let sendingMessageId: number | undefined;
+
+    try {
+      const sendingMessage = await ctx.reply('🚀 Generating ZK proof...');
+      sendingMessageId = (sendingMessage as any)?.message_id;
+    } catch (error) {
+      throw new Error(error);
+    }
+
+    const latestNoteIndexSender =
+      await this.commitmentService.getLatestNote(telegramId);
+
+    // Get all commitments that satisfies the transact condition
+    const oldCommitments = pending.commitments;
+    const parsedAmountToSend = parseUnits(pending.amount, 18);
+
+    // calculate change amount of old commitments
+    const changeAmount =
+      oldCommitments.reduce(
+        (acc: bigint, curr: CommitmentDocument) =>
+          acc + parseUnits(curr.amount, 18),
+        0n,
+      ) - parsedAmountToSend;
+
+    // Generate new commitments
+    const newCommitments = await Prove.generateTransactCommitment({
+      amountToSend: parsedAmountToSend,
+      recipient: configuration().relayer.ADDRESS,
+      recipientNoteIndex: Date.now(),
+      changeAmount,
+      sender: telegramId,
+      senderNoteIndex: latestNoteIndexSender + 1,
+    });
+
+    // Generate ZK proof
+    const zkInput = await Prove.buildZKInput(
+      telegramId,
+      pending.tokenIn, // private token
+      parsedAmountToSend,
+      pending.tokenIn, // tokenOut
+      parsedAmountToSend,
+      configuration().relayer.ADDRESS,
+      configuration().relayer.ADDRESS,
+      oldCommitments,
+      newCommitments,
+    );
+
+    const zkp = await Prove.generateZKProof(zkInput);
+    if (chatId && sendingMessageId) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+      } catch {
+        //
+      }
+    }
+
+    // Step 2: Unshield token to relayer
+    try {
+      const sendingMessage = await ctx.reply(
+        '🚀 Unshielding token to relayer...',
+      );
+      sendingMessageId = (sendingMessage as any)?.message_id;
+    } catch {
+      console.log('Error When confirming');
+    }
+
+    await this.transactionService.privateTransact(
+      pending.userId,
+      telegramId,
+      pending.sessionToken,
+      zkp,
+      pending.commitments.map(
+        (commitment: CommitmentDocument) => commitment.commitment,
+      ),
+      {
+        rooiIdList: pending.commitments.map(
+          (commitment: CommitmentDocument) => commitment.rootId,
+        ),
+        rootList: pending.commitments.map(
+          (commitment: CommitmentDocument) => commitment.root,
+        ),
+        nullifierHashes: pending.commitments.map(
+          (commitment: CommitmentDocument) =>
+            Prove.shortenCommitment(commitment.nullifier),
+        ),
+        newCommitment1: Prove.shortenCommitment(
+          newCommitments.commitmentRecipient,
+        ),
+        newCommitment2: newCommitments.commitmentChange
+          ? Prove.shortenCommitment(newCommitments.commitmentChange)
+          : null,
+        tokenOut: pending.tokenIn,
+        amountOut: pending.amount,
+        recipientWithdraw: configuration().relayer.ADDRESS,
+      },
+      {
+        recipient: configuration().relayer.ADDRESS,
+        token: pending.tokenIn,
+        amountToSend: pending.amount,
+        amountChange: formatUnits(changeAmount, 18),
+        newCommitments: newCommitments,
+      },
+      pending.tokenIn === CONTRACT_ADDRESS.ZTARKNET_TOKEN ? 'strk' : 'ztt', // TODO: search token identifier
+      true,
+    );
+    if (chatId && sendingMessageId) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+      } catch {
+        //
+      }
+    }
+
+    // Step 3: swap token
+    try {
+      const sendingMessage = await ctx.reply('💸 Swapping token...');
+      sendingMessageId = (sendingMessage as any)?.message_id;
+    } catch {
+      console.log('Error When confirming');
+    }
+
+    const { txHash: swapTxHash, amoutOut } =
+      await this.transactionService.swapTokens(
+        pending.userId,
+        pending.tokenIn,
+        pending.tokenOut,
+        pending.amount,
+      );
+
+    if (chatId && sendingMessageId) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, sendingMessageId);
+      } catch {
+        //
+      }
+    }
+
+    // Step 4: Shield new token to user
+    try {
+      const sendingMessage = await ctx.reply('🛡 Shielding new balance...');
+      sendingMessageId = (sendingMessage as any)?.message_id;
+    } catch {
+      console.log('Error When confirming');
+    }
+    const latestNoteIndex =
+      await this.commitmentService.getLatestNote(telegramId);
+    const parsedAmount = parseUnits(amoutOut, 18);
+
+    const commitmemt = await Prove.generateShieldCommitment({
+      recipient: telegramId,
+      amount: parsedAmount,
+      noteIndex: latestNoteIndex + 1,
+    });
+
+    await this.transactionService.shieldToken(
+      pending.userId,
+      telegramId,
+      pending.sessionToken,
+      amoutOut,
+      pending.tokenOut,
+      commitmemt,
+      pending.tokenOut === CONTRACT_ADDRESS.ZTARKNET_TOKEN ? 'strk' : 'ztt', // TODO: search token identifier
+      true,
+    );
+
+    return { swapTxHash, amoutOut };
   }
 }

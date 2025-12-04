@@ -16,6 +16,8 @@ import {
 } from './ui-builder.service';
 import { TOKENS } from '@app/shared/ztarknet/tokens';
 import { SwapService } from '../wallet/swap.service';
+import { CommitmentService } from '../commitment/commitment.service';
+import { parseUnits } from 'ethers';
 
 type TransferMode = 'public' | 'private';
 type TransferWizardStep = 'select_token' | 'recipient' | 'amount';
@@ -39,6 +41,7 @@ interface SwapWizardState {
   tokenOut?: string;
   amount?: string;
   amountOut?: string;
+  priceImpact?: number;
 }
 
 @Update()
@@ -51,6 +54,7 @@ export class TelegramService implements OnModuleInit {
     private sessionService: SessionService,
     private walletService: WalletService,
     private swapService: SwapService,
+    private commitmentService: CommitmentService,
     private readonly uiBuilder: UIBuilderService,
   ) {}
 
@@ -383,6 +387,13 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
+      const commitments =
+        await this.commitmentService.getCommitmentsForTransact(
+          telegramId,
+          wizard.tokenIn,
+          parseUnits(wizard.amount, 18),
+        );
+
       const user = await this.usersService.getUserByTelegramId(telegramId);
       if (!user || !user.isWalletCreated) {
         await ctx.answerCbQuery('Wallet not found', { show_alert: true });
@@ -422,6 +433,8 @@ export class TelegramService implements OnModuleInit {
         tokenOut: wizard.tokenOut,
         amount: wizard.amount,
         amountOut: wizard.amountOut,
+        priceImpact: wizard.priceImpact,
+        commitments,
       };
 
       // Store pending operation using the handler's method
@@ -1444,7 +1457,7 @@ export class TelegramService implements OnModuleInit {
     const tokenRows = this.chunkButtons(
       await Promise.all(
         tokens.map(async (token, index) => {
-          const price = await this.swapService.getPrice(token.address);
+          const price = await this.swapService.getMockPrice(token.address);
           const isDefault =
             token.address.toLowerCase() === defaultToken.toLowerCase();
           // Use symbol instead of full address to keep callback_data under 64 bytes
@@ -1482,7 +1495,7 @@ export class TelegramService implements OnModuleInit {
     const tokenRows = this.chunkButtons(
       await Promise.all(
         availableTokens.map(async (token) => {
-          const price = await this.swapService.getPrice(token.address);
+          const price = await this.swapService.getMockPrice(token.address);
           // Use symbol instead of full address to keep callback_data under 64 bytes
           return Markup.button.callback(
             `${token.symbol} ($${price.toFixed(2)})`,
@@ -1542,12 +1555,14 @@ export class TelegramService implements OnModuleInit {
     tokenOutAddress: string,
     amount: string,
     amountOut: string,
+    priceImpact: number,
   ) {
     // Get detailed swap overview
     const overview = await this.swapService.getSwapOverview(
       tokenInAddress,
       tokenOutAddress,
       amount,
+      amountOut,
     );
 
     const buttons: InlineKeyboardButton[][] = [
@@ -1562,7 +1577,8 @@ export class TelegramService implements OnModuleInit {
       `• *From:* \`${overview.from.amount} ${overview.from.symbol}\`\n` +
       `• *To:* \`${overview.to.symbol}\`\n` +
       `• *Est. Value:* ${overview.estimatedValue}\n` +
-      `• *Est. Output:* \`${overview.estimatedOutput}\`\n` +
+      `• *Est. Output:* \`${amountOut} ${overview.to.symbol}\`\n` +
+      `• *Price Impact:* ${priceImpact.toFixed(2)}%\n\n` +
       `• *Route:* \`${overview.route}\`\n\n` +
       `▲ *Important Notes:*\n` +
       `• Prices may change before execution\n` +
@@ -1607,7 +1623,8 @@ export class TelegramService implements OnModuleInit {
       );
 
       wizard.amount = text.trim();
-      wizard.amountOut = amountOut;
+      wizard.amountOut = amountOut.amountOut;
+      wizard.priceImpact = amountOut.priceImpact;
       wizard.step = 'confirm';
       this.swapWizardSessions.set(telegramId, wizard);
 
@@ -1617,6 +1634,7 @@ export class TelegramService implements OnModuleInit {
         wizard.tokenOut,
         wizard.amount,
         wizard.amountOut,
+        wizard.priceImpact,
       );
       return true;
     } catch (error) {
