@@ -1569,11 +1569,7 @@ export class WalletHandler {
     );
     const tokenSymbol = tokenAddress ? 'Token' : 'STRK';
 
-    return (
-      `💰 Balance\n\n` +
-      `Address: \`${wallet.address}\` \n` +
-      `${tokenSymbol}: ${balance}`
-    );
+    return `Address: \`${wallet.address}\` \n` + `${tokenSymbol}: ${balance}`;
   }
 
   async buildPrivateBalanceView(
@@ -2266,7 +2262,6 @@ export class WalletHandler {
       this.pendingOperations.delete(telegramId);
 
       const tokenInSymbol = this.swapService.getTokenSymbol(pending.tokenIn);
-      const tokenOutSymbol = this.swapService.getTokenSymbol(pending.tokenOut);
 
       // Get swap overview for detailed success message
       const overview = await this.swapService.getSwapOverview(

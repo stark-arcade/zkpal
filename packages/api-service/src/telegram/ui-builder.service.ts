@@ -45,16 +45,15 @@ export class UIBuilderService {
     'wallets:home': [
       [
         // { text: '💰 Balance Native', action: 'balance:public' },
-        { text: '💰 Balance Private', action: 'balance:private' },
+        // { text: '💰 Balance Private', action: 'balance:private' },
+        { text: '🔄 Swap Token', action: 'wallet:swap' },
         { text: '🪙 Tx History', action: 'wallet:history' },
       ],
       [
         { text: '💰 Transfer Native', action: 'wallet:transfer_public' },
         { text: '🪙 Transfer Private', action: 'wallet:transfer_private' },
       ],
-      [
-        { text: '🔄 Swap Token', action: 'wallet:swap' },
-      ],
+
       [
         { text: '🌉 Shield Token', action: 'wallet:shield' },
         { text: '🔭 Unshield Token', action: 'wallet:unshield' },

@@ -72,10 +72,10 @@ export class TelegramService implements OnModuleInit {
       { command: 'transfer', description: 'Public token transfer' },
       {
         command: 'privatetransfer',
-        description: 'Private token transfer (mocked)',
+        description: 'Private token transfer ',
       },
-      { command: 'shield', description: 'Shield tokens (mock)' },
-      { command: 'unshield', description: 'Unshield tokens (mock)' },
+      { command: 'shield', description: 'Shield tokens' },
+      { command: 'unshield', description: 'Unshield tokens' },
       { command: 'history', description: 'View transaction history' },
       { command: 'logout', description: 'Lock your wallet' },
       { command: 'help', description: 'Get help info' },
@@ -631,7 +631,19 @@ export class TelegramService implements OnModuleInit {
     // Wallet exists and is deployed, show wallet center
     const { walletSlots } = await this.resolveWalletContext(telegramId);
     const balance = await this.walletHandler.buildPublicBalanceView(telegramId);
-    await this.renderScreen(ctx, balance, 'wallets:home', { walletSlots });
+    const privateBalances = await this.walletHandler.buildPrivateBalanceView(
+      ctx.from?.id.toString(),
+      ctx.from?.username,
+    );
+
+    await this.renderScreen(
+      ctx,
+      balance + `\n\n ${privateBalances}`,
+      'wallets:home',
+      {
+        walletSlots,
+      },
+    );
   }
 
   private async renderWalletCreationFlow(ctx: Context) {
@@ -1029,11 +1041,7 @@ export class TelegramService implements OnModuleInit {
     const telegramId = ctx.from?.id.toString();
 
     const balance = await this.walletHandler.buildPublicBalanceView(telegramId);
-    const privateBalances = await this.walletHandler.buildPrivateBalanceView(
-      telegramId,
-      ctx.from?.username,
-    );
-    const sections = [balance, privateBalances];
+    const sections = [balance];
 
     if (body) {
       sections.push(body);
