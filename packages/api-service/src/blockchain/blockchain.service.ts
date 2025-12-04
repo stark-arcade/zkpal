@@ -15,6 +15,7 @@ import {
   uint256,
   AccountInterface,
   num,
+  Nonce,
 } from 'starknet';
 import { Prove } from '../prove/prove.service';
 import { ZKPAL_ABI } from '@app/shared/ztarknet/abi/zkpal';
@@ -29,9 +30,23 @@ export function sleep(ms: number) {
 @Injectable()
 export class BlockchainService {
   private readonly rpcUrl: string;
+  private nonce: Nonce;
 
   constructor(private configService: ConfigService) {
     this.rpcUrl = this.configService.getOrThrow<string>('app.rpc_url');
+    this.setRelayerNonce();
+  }
+
+  private async setRelayerNonce() {
+    const account = this.createAccountFromPrivateKey(
+      configuration().relayer.PRIVATE_KEY,
+      configuration().relayer.ADDRESS,
+    );
+    this.nonce = await account.getNonce();
+  }
+
+  private async updateRelayerNonce(newNonce: bigint) {
+    this.nonce = num.toHex(BigInt(newNonce));
   }
 
   /**
@@ -189,10 +204,7 @@ export class BlockchainService {
   /**
    * Create Account instance from private key (for transactions)
    */
-  async createAccountFromPrivateKey(
-    privateKey: string,
-    address: string,
-  ): Promise<any> {
+  createAccountFromPrivateKey(privateKey: string, address: string): Account {
     try {
       const account = new Account({
         provider: new RpcProvider({ nodeUrl: this.rpcUrl }),
@@ -270,34 +282,49 @@ export class BlockchainService {
     tokenAddress: string,
     amount: string,
     commitment: Field,
+    isRelayer: boolean = false,
   ): Promise<{ txHash: string; root: string; rootId: string }> {
     try {
       const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
       const parsedAmount = parseUnits(amount, 18);
-      // sleep to avoid duplicate nonce
-      await sleep(5000);
-      const { transaction_hash: txHash } = await account.execute([
-        {
-          contractAddress: tokenAddress,
-          entrypoint: 'approve',
-          calldata: CallData.compile({
-            spender: CONTRACT_ADDRESS.ZKPAL,
-            amount: uint256.bnToUint256(parsedAmount),
-          }),
-        },
-        {
-          contractAddress: CONTRACT_ADDRESS.ZKPAL,
-          entrypoint: 'shield',
-          calldata: CallData.compile({
-            commitment: Prove.shortenCommitment(commitment),
-            token: tokenAddress,
-            amount: uint256.bnToUint256(parsedAmount),
-          }),
-        },
-      ]);
+      let nonce;
+      if (isRelayer) {
+        // check relayer nonce
+        nonce = await account.getNonce();
+        if (BigInt(nonce) < BigInt(this.nonce)) {
+          nonce = this.nonce;
+        }
+
+        this.updateRelayerNonce(BigInt(nonce) + 1n);
+        await sleep(7000);
+      }
+
+      const exeOpt = {
+        nonce: nonce,
+      };
+      const { transaction_hash: txHash } = await account.execute(
+        [
+          {
+            contractAddress: tokenAddress,
+            entrypoint: 'approve',
+            calldata: CallData.compile({
+              spender: CONTRACT_ADDRESS.ZKPAL,
+              amount: uint256.bnToUint256(parsedAmount),
+            }),
+          },
+          {
+            contractAddress: CONTRACT_ADDRESS.ZKPAL,
+            entrypoint: 'shield',
+            calldata: CallData.compile({
+              commitment: Prove.shortenCommitment(commitment),
+              token: tokenAddress,
+              amount: uint256.bnToUint256(parsedAmount),
+            }),
+          },
+        ],
+        isRelayer ? exeOpt : { version: 3 },
+      );
       const txReciept = await myProvider.waitForTransaction(txHash);
-      // sleep to avoid duplicate nonce
-      await sleep(3000);
       // Parse event NewLeafInserted to get root
       const zkPalContract = new Contract({
         abi: ZKPAL_ABI,
@@ -336,12 +363,28 @@ export class BlockchainService {
     amountIn: string,
     mintAmountOut: string = '0',
     slippage: number = 0.5,
+    isRelayer: boolean = true,
   ): Promise<{ txHash: string; amoutOut: bigint }> {
     try {
       const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
       const parsedAmount = parseUnits(amountIn, 18);
-      // sleep to avoid duplicate nonce
-      await sleep(5000);
+      let nonce;
+      if (isRelayer) {
+        // check relayer nonce
+        nonce = await account.getNonce();
+        if (BigInt(nonce) < BigInt(this.nonce)) {
+          nonce = this.nonce;
+        }
+
+        this.updateRelayerNonce(BigInt(nonce) + 1n);
+        await sleep(7000);
+      }
+
+      const exeOpt = {
+        nonce: nonce,
+        version: 3,
+      };
+
       const { transaction_hash: txHash } = await account.execute(
         [
           {
@@ -361,7 +404,7 @@ export class BlockchainService {
             }),
           },
         ],
-        { version: 3, skipValidate: true },
+        isRelayer ? exeOpt : { version: 3 },
       );
       const txReceipt = await myProvider.waitForTransaction(txHash);
 
@@ -394,6 +437,7 @@ export class BlockchainService {
     account: Account,
     fullPoof: bigint[],
     publicInput: TPublicInputTransact,
+    isRelayer: boolean = false,
   ): Promise<{
     txHash: string;
     rootRecipient: string;
@@ -403,8 +447,23 @@ export class BlockchainService {
   }> {
     try {
       //1. execute tx
+      let nonce;
+      if (isRelayer) {
+        // check relayer nonce
+        nonce = await account.getNonce();
+        if (BigInt(nonce) < BigInt(this.nonce)) {
+          nonce = this.nonce;
+        }
+        this.updateRelayerNonce(BigInt(nonce) + 1n);
+      }
+      await sleep(7000);
+
+      const exeOpt = {
+        nonce: nonce,
+        version: 3,
+      };
+
       const myProvider = new RpcProvider({ nodeUrl: this.rpcUrl });
-      await sleep(5000);
       const { transaction_hash: txHash } = await account.execute(
         [
           {
@@ -430,16 +489,15 @@ export class BlockchainService {
             }),
           },
         ],
-        {
-          version: 3,
-          skipValidate: true,
-        },
+        isRelayer
+          ? exeOpt
+          : {
+              version: 3,
+            },
       );
 
       //2. get tx roots from tx receipt
       const txReceipt = await myProvider.waitForTransaction(txHash);
-      // sleep to avoid duplicate nonce
-      await sleep(3000);
       const zkPalContract = new Contract({
         abi: ZKPAL_ABI,
         address: CONTRACT_ADDRESS.ZKPAL,

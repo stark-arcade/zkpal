@@ -158,6 +158,7 @@ export class TransactionService {
         account,
         zkp,
         publicInput,
+        isRelayer,
       );
     } catch (error) {
       throw new Error(`Transaction failed: ${error.message}`);
@@ -291,6 +292,7 @@ export class TransactionService {
         tokenAddress,
         amount,
         input.commitment,
+        isRelayer,
       );
     } catch (error) {
       throw new BadRequestException(`Transaction failed: ${error.message}`);
